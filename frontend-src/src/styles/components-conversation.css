@@ -1,0 +1,755 @@
+/* =============================================================================
+   Aham Design System · Conversation depth (v2.1)
+   -----------------------------------------------------------------------------
+   AI conversation patterns the v2 base didn't cover yet — attachments,
+   downloadable artifacts, quick choices, multi-step plans, voice input.
+
+     · .attachment-chip       file attached to outgoing message
+     · .msg-attachment        AI-generated downloadable artifact reference
+     · .quick-replies         AI-offered inline choice buttons
+     · .plan-block            visible multi-step reasoning / task plan
+     · .composer.is-recording voice-recording state on the composer
+   ============================================================================= */
+
+
+/* =============================================================================
+   ATTACHMENT-CHIP — file attached to an outgoing user message
+   -----------------------------------------------------------------------------
+   Sits in a row above the composer textarea before send; sits inline with
+   the .msg-user pill after send. One shape for both placements.
+
+   States:
+     default      uploaded, ready
+     .is-uploading  with progress fill
+     .has-error     red border + retry action
+   ============================================================================= */
+
+.attachment-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding-bottom: var(--space-2);
+}
+
+.attachment-chip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: 28px;
+  padding: 0 var(--space-2) 0 var(--space-3);
+  background: var(--bg-panel);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  font-size: var(--text-xs);
+  color: var(--fg-default);
+  max-width: 280px;
+  overflow: hidden;
+}
+.attachment-chip__type {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--fg-subtle);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  flex: none;
+}
+.attachment-chip__name {
+  font-weight: var(--weight-medium);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.attachment-chip__meta {
+  color: var(--fg-subtle);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--text-2xs);
+  flex: none;
+}
+.attachment-chip__remove {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  padding: 2px 4px;
+  margin-left: 2px;
+  font: inherit;
+  font-size: var(--text-xs);
+  color: var(--fg-subtle);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  line-height: 1;
+  flex: none;
+}
+.attachment-chip__remove:hover { background: var(--fill-subtle); color: var(--fg-default); }
+
+/* Uploading — a thin progress fill underneath */
+.attachment-chip.is-uploading {
+  background: var(--bg-canvas);
+}
+.attachment-chip.is-uploading::after {
+  content: "";
+  position: absolute;
+  left: 0; bottom: 0;
+  height: 2px;
+  width: var(--upload, 50%);
+  background: var(--accent-default);
+  transition: width var(--duration-slow) var(--ease-emphasis);
+}
+
+/* Error — red border + a retry label replaces meta */
+.attachment-chip.has-error {
+  border-color: var(--danger-fg);
+}
+.attachment-chip.has-error .attachment-chip__meta {
+  color: var(--danger-fg);
+}
+
+
+/* =============================================================================
+   MSG-ATTACHMENT — AI-generated downloadable artifact
+   -----------------------------------------------------------------------------
+   The chip-style reference that hangs under an .msg-assistant when the model
+   produced a real file (PDF / audio / xlsx / docx). Distinct from .ai-canvas
+   (which is an in-page editable surface) — this one is a real binary file
+   the user can open in another tool.
+
+   Wide enough to carry actions inline (预览 / 下载 / 关联).
+   ============================================================================= */
+
+.msg-attachment {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: var(--space-3) var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  background: var(--bg-canvas);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  max-width: 64ch;
+  text-decoration: none;
+  color: var(--fg-default);
+  margin: var(--space-2) 0;
+}
+.msg-attachment:hover {
+  border-color: var(--border-strong);
+}
+.msg-attachment__type {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-subtle);
+  background: var(--bg-panel);
+  padding: 3px 6px;
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+}
+.msg-attachment__body { min-width: 0; }
+.msg-attachment__name {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--fg-default);
+  text-wrap: pretty;
+  margin: 0;
+  line-height: var(--leading-snug);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.msg-attachment__meta {
+  margin-top: 2px;
+  font-size: var(--text-xs);
+  color: var(--fg-subtle);
+}
+.msg-attachment__meta > span + span::before {
+  content: " · ";
+  color: var(--fg-faint);
+}
+.msg-attachment__actions {
+  display: flex;
+  gap: var(--space-1);
+  flex: none;
+}
+.msg-attachment__actions button {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  padding: 4px var(--space-2);
+  font: inherit;
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+.msg-attachment__actions button:hover {
+  background: var(--fill-subtle);
+  color: var(--fg-default);
+}
+
+
+/* =============================================================================
+   QUICK-REPLIES — AI-offered inline choice buttons
+   -----------------------------------------------------------------------------
+   Appears at the END of an .msg-assistant when the model is offering
+   choices instead of an open-ended question. Same shape as .starter-prompts
+   (plain text buttons, no chrome), but lives inside a message and disappears
+   once the user picks one.
+   ============================================================================= */
+
+.quick-replies {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px dashed var(--border-default);
+}
+.quick-reply {
+  appearance: none;
+  background: transparent;
+  border: 1px solid var(--border-default);
+  padding: var(--space-2) var(--space-3);
+  font: inherit;
+  font-size: var(--text-sm);
+  color: var(--fg-default);
+  cursor: pointer;
+  border-radius: var(--radius-md);
+  line-height: 1.2;
+  transition:
+    background var(--duration-fast) var(--ease-standard),
+    border-color var(--duration-fast) var(--ease-standard);
+}
+.quick-reply:hover {
+  background: var(--fill-subtle);
+  border-color: var(--border-strong);
+}
+.quick-reply:active { background: var(--fill-muted); }
+.quick-reply[data-emphasis="primary"] {
+  border-color: var(--accent-default);
+  color: var(--accent-default);
+}
+.quick-reply[data-emphasis="primary"]:hover {
+  background: var(--accent-soft);
+}
+
+/* "or write something" fallback at the end of the row */
+.quick-replies .quick-reply--fallback {
+  color: var(--fg-subtle);
+  border-color: transparent;
+  text-decoration: underline;
+  text-decoration-color: var(--border-strong);
+  text-underline-offset: 2px;
+}
+
+
+/* =============================================================================
+   PLAN-BLOCK — visible multi-step reasoning / task plan
+   -----------------------------------------------------------------------------
+   When the model is doing multi-step work (multi-round bocha + LLM extract,
+   ASR → diarize → align → summarize), surface the plan so the user can see
+   "what's the AI doing" without a "Thinking…" lie.
+
+   States are per step (data-state). The block as a whole has no spinner.
+   ============================================================================= */
+
+.plan-block {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  font-size: var(--text-sm);
+  margin: var(--space-2) 0;
+  max-width: 64ch;
+}
+.plan-block > summary {
+  list-style: none;
+  cursor: pointer;
+  padding: var(--space-3) var(--space-4);
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  user-select: none;
+}
+.plan-block > summary::-webkit-details-marker { display: none; }
+.plan-block > summary::before {
+  content: "▸";
+  display: inline-block;
+  color: var(--fg-subtle);
+  transition: transform var(--duration-fast) var(--ease-standard);
+  flex: none;
+}
+.plan-block[open] > summary::before { transform: rotate(90deg); }
+
+.plan-block__title {
+  font-weight: var(--weight-medium);
+  color: var(--fg-default);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.plan-block__step {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--fg-subtle);
+  font-variant-numeric: tabular-nums;
+}
+
+.plan-block__steps {
+  list-style: none;
+  margin: 0;
+  padding: 0 var(--space-4) var(--space-3) calc(var(--space-4) + var(--space-5));
+  border-top: 1px solid var(--border-default);
+  font-size: var(--text-sm);
+}
+.plan-block__steps > li {
+  position: relative;
+  padding: var(--space-2) 0;
+  color: var(--fg-muted);
+  line-height: var(--leading-relaxed);
+}
+.plan-block__steps > li::before {
+  content: "";
+  position: absolute;
+  left: calc(-1 * var(--space-5) - 2px);
+  top: calc(var(--space-2) + 6px);
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  border: 1.5px solid var(--fg-faint);
+  background: var(--bg-panel);
+}
+.plan-block__steps > li[data-state="done"] {
+  color: var(--fg-muted);
+}
+.plan-block__steps > li[data-state="done"]::before {
+  background: var(--success-fg);
+  border-color: var(--success-fg);
+}
+.plan-block__steps > li[data-state="active"] {
+  color: var(--fg-default);
+  font-weight: var(--weight-medium);
+}
+.plan-block__steps > li[data-state="active"]::before {
+  background: var(--accent-default);
+  border-color: var(--accent-default);
+  animation: plan-active-pulse 1.6s ease-in-out infinite;
+}
+.plan-block__steps > li[data-state="pending"] {
+  color: var(--fg-subtle);
+}
+.plan-block__steps > li[data-state="error"] {
+  color: var(--danger-fg);
+}
+.plan-block__steps > li[data-state="error"]::before {
+  background: var(--danger-fg);
+  border-color: var(--danger-fg);
+}
+.plan-block__step-detail {
+  margin-top: 2px;
+  font-size: var(--text-xs);
+  color: var(--fg-subtle);
+  font-family: var(--font-mono);
+}
+
+@keyframes plan-active-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 var(--accent-soft); }
+  50%      { box-shadow: 0 0 0 4px var(--accent-soft); }
+}
+
+
+/* =============================================================================
+   COMPOSER · VOICE RECORDING STATE
+   -----------------------------------------------------------------------------
+   Modifies the existing .composer when the user holds the mic button.
+   Hides the textarea, shows a 3-line layout: pulsing recording dot + duration,
+   a row of subtle waveform bars, and cancel / finish actions.
+   ============================================================================= */
+
+.composer.is-recording {
+  border-color: var(--accent-default);
+}
+.composer.is-recording textarea { display: none; }
+
+.composer-recording {
+  display: none;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+}
+.composer.is-recording .composer-recording { display: flex; }
+.composer.is-recording .composer-row,
+.composer.is-recording .composer-tools { display: none; }
+
+.composer-recording__status {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  font-size: var(--text-sm);
+  color: var(--fg-default);
+}
+.composer-recording__dot {
+  width: 8px; height: 8px;
+  border-radius: 999px;
+  background: var(--danger-fg);
+  flex: none;
+  animation: rec-pulse 1.2s ease-in-out infinite;
+}
+@keyframes rec-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.35; }
+}
+.composer-recording__time {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-default);
+  font-size: var(--text-sm);
+}
+.composer-recording__hint {
+  color: var(--fg-subtle);
+  font-size: var(--text-xs);
+  margin-left: auto;
+}
+
+.composer-recording__wave {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 18px;
+}
+.composer-recording__wave .b {
+  width: 2px;
+  background: var(--accent-default);
+  border-radius: 1px;
+  animation: rec-wave 0.9s ease-in-out infinite;
+}
+.composer-recording__wave .b:nth-child(2)  { animation-delay: 0.05s; }
+.composer-recording__wave .b:nth-child(3)  { animation-delay: 0.10s; }
+.composer-recording__wave .b:nth-child(4)  { animation-delay: 0.15s; }
+.composer-recording__wave .b:nth-child(5)  { animation-delay: 0.20s; }
+.composer-recording__wave .b:nth-child(6)  { animation-delay: 0.25s; }
+.composer-recording__wave .b:nth-child(7)  { animation-delay: 0.30s; }
+.composer-recording__wave .b:nth-child(8)  { animation-delay: 0.35s; }
+.composer-recording__wave .b:nth-child(9)  { animation-delay: 0.40s; }
+.composer-recording__wave .b:nth-child(10) { animation-delay: 0.45s; }
+.composer-recording__wave .b:nth-child(11) { animation-delay: 0.50s; }
+.composer-recording__wave .b:nth-child(12) { animation-delay: 0.55s; }
+.composer-recording__wave .b:nth-child(13) { animation-delay: 0.60s; }
+.composer-recording__wave .b:nth-child(14) { animation-delay: 0.65s; }
+@keyframes rec-wave {
+  0%, 100% { height: 4px; }
+  50%      { height: 18px; }
+}
+
+.composer-recording__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  justify-content: flex-end;
+}
+
+
+/* =============================================================================
+   UPLOAD-ZONE — drag-and-drop file upload area (v2.2)
+   -----------------------------------------------------------------------------
+   The official entry point for any "drop a file here" flow: CSV import,
+   recording upload, business-card OCR, voiceprint registration. Hidden by
+   default in chat (the paperclip is enough); surfaced explicitly when a
+   page is *about* file ingestion.
+
+   States:
+     default                idle
+     .is-active             dragenter — accent border + soft fill
+     .is-uploading          files queued; .attachment-chip is-uploading rows below
+     .has-error             validation failed (wrong type / too large)
+   ============================================================================= */
+
+.upload-zone {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.upload-zone__drop {
+  position: relative;
+  display: grid;
+  place-items: center;
+  padding: var(--space-10) var(--space-6);
+  background: var(--bg-canvas);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-lg);
+  text-align: center;
+  cursor: pointer;
+  transition:
+    border-color var(--duration-fast) var(--ease-standard),
+    background   var(--duration-fast) var(--ease-standard);
+  min-height: 160px;
+}
+.upload-zone__drop:hover {
+  border-color: var(--fg-muted);
+  background: var(--fill-subtle);
+}
+.upload-zone.is-active .upload-zone__drop {
+  border-style: solid;
+  border-color: var(--accent-default);
+  background: var(--accent-soft);
+}
+.upload-zone.has-error .upload-zone__drop {
+  border-color: var(--danger-fg);
+}
+
+.upload-zone__primary {
+  font-size: var(--text-base);
+  color: var(--fg-default);
+  font-weight: var(--weight-medium);
+  margin: 0;
+  text-wrap: balance;
+}
+.upload-zone__browse {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  font-weight: var(--weight-medium);
+  color: var(--accent-default);
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: var(--accent-default);
+  text-underline-offset: 3px;
+}
+.upload-zone__browse:hover { text-decoration-thickness: 2px; }
+
+.upload-zone__hint {
+  margin: var(--space-2) 0 0;
+  font-size: var(--text-xs);
+  color: var(--fg-subtle);
+  line-height: var(--leading-relaxed);
+  text-wrap: pretty;
+}
+.upload-zone__hint .accept {
+  font-family: var(--font-mono);
+  color: var(--fg-muted);
+}
+
+/* Compact variant — for use inside a form section, smaller padding */
+.upload-zone--compact .upload-zone__drop {
+  min-height: 96px;
+  padding: var(--space-5) var(--space-4);
+}
+
+/* Hidden native file input, paired with the drop zone via label */
+.upload-zone__input {
+  position: absolute;
+  width: 1px; height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Diagnostic — uses the .diag pattern. The upload-zone just provides spacing
+   below the drop area for it to live in. */
+
+
+/* =============================================================================
+   TRANSCRIPT — speaker-attributed transcript view (v2.2)
+   -----------------------------------------------------------------------------
+   The viewer for recording → ASR → diarized transcript. Distinct from
+   .preview-doc (which is for documents) and from .msg-assistant (which is
+   chat prose). Carries a minimal audio player up top and per-line speaker /
+   timestamp / text rows below, with the current playback line highlighted.
+   ============================================================================= */
+
+.transcript {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  background: var(--bg-canvas);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  max-width: 72ch;
+}
+
+/* --- head --- */
+.transcript__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-5) 0;
+}
+.transcript__title {
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
+  color: var(--fg-default);
+  letter-spacing: -0.005em;
+}
+.transcript__meta {
+  font-size: var(--text-xs);
+  color: var(--fg-subtle);
+  font-variant-numeric: tabular-nums;
+}
+.transcript__meta > span + span::before {
+  content: " · ";
+  color: var(--fg-faint);
+}
+
+/* --- audio player — minimal: play, progress, time --- */
+.transcript__player {
+  display: grid;
+  grid-template-columns: 32px auto 1fr auto;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 0 var(--space-5) var(--space-4);
+  border-bottom: 1px solid var(--border-default);
+}
+.transcript__play {
+  appearance: none;
+  width: 32px; height: 32px;
+  border-radius: 999px;
+  background: var(--fg-default);
+  color: var(--bg-canvas);
+  border: 0;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  line-height: 1;
+  padding: 0;
+}
+.transcript__play:hover { background: var(--accent-default); color: var(--accent-fg); }
+.transcript__play::before { content: "▶"; transform: translateX(1px); }
+.transcript__play.is-playing::before { content: "❚❚"; transform: none; font-size: 9px; letter-spacing: -1px; }
+.transcript__time,
+.transcript__duration {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.transcript__progress {
+  height: 3px;
+  background: var(--fill-muted);
+  border-radius: 999px;
+  overflow: hidden;
+  cursor: pointer;
+}
+.transcript__progress-fill {
+  height: 100%;
+  background: var(--accent-default);
+  border-radius: 999px;
+}
+
+/* --- lines --- */
+.transcript__lines {
+  list-style: none;
+  margin: 0;
+  padding: var(--space-2) 0 var(--space-3);
+  max-height: 420px;
+  overflow: auto;
+}
+.transcript__line {
+  display: grid;
+  grid-template-columns: 96px auto 1fr auto;
+  gap: var(--space-3);
+  align-items: baseline;
+  padding: var(--space-3) var(--space-5);
+  position: relative;
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-standard);
+}
+.transcript__line:hover { background: var(--fill-subtle); }
+.transcript__line.is-current {
+  background: var(--accent-soft);
+}
+.transcript__line.is-current::before {
+  content: "";
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 2px;
+  background: var(--accent-default);
+}
+
+.transcript__speaker {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--fg-default);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.transcript__line[data-speaker-unknown] .transcript__speaker {
+  color: var(--fg-subtle);
+  font-style: italic;
+}
+.transcript__when {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--fg-subtle);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.transcript__text {
+  font-size: var(--text-sm);
+  color: var(--fg-default);
+  line-height: var(--leading-relaxed);
+  text-wrap: pretty;
+  min-width: 0;
+}
+.transcript__text mark {
+  background: var(--accent-soft);
+  color: inherit;
+  padding: 0 2px;
+}
+/* Inline AI note attached to a specific line */
+.transcript__text .note {
+  display: inline-block;
+  margin-left: 4px;
+  font-size: var(--text-xs);
+  color: var(--accent-default);
+  border-bottom: 1px dashed var(--accent-default);
+  cursor: help;
+}
+
+/* Per-line actions — reveal on row hover, mirror .data-table .row-actions */
+.transcript__actions {
+  display: inline-flex;
+  gap: var(--space-1);
+  opacity: 0;
+  transition: opacity var(--duration-fast) var(--ease-standard);
+}
+.transcript__line:hover .transcript__actions,
+.transcript__line:focus-within .transcript__actions { opacity: 1; }
+@media (hover: none) { .transcript__actions { opacity: 1; } }
+.transcript__actions button {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  padding: 2px var(--space-2);
+  font: inherit;
+  font-size: var(--text-xs);
+  color: var(--fg-subtle);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+}
+.transcript__actions button:hover {
+  background: var(--bg-panel);
+  color: var(--fg-default);
+}
+
+/* Speaker grouping — a sticky little eyebrow within scrolling transcripts */
+.transcript__day {
+  position: sticky;
+  top: 0;
+  background: var(--bg-canvas);
+  padding: var(--space-2) var(--space-5);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-subtle);
+  border-bottom: 1px solid var(--border-default);
+}

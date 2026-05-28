@@ -1,0 +1,60 @@
+/* =============================================================================
+   NewVoice — global stylesheet
+   Loads the Aham Design System foundation + Aham Core component bundle.
+   Order is significant: tokens → element type → component CSS.
+   Tailwind v4 is mounted via @tailwindcss/vite; design tokens become utility
+   variables thanks to tailwind.theme.css.
+   ============================================================================= */
+
+@import "tailwindcss";
+@import "./design-tokens.css";
+@import "./tailwind.theme.css";
+@import "./colors_and_type.css";
+
+/* Aham Core (AI-CRM) bundle — every component file the product uses. Order
+   between the six is not significant once tokens + element type are in. */
+@import "./components-shell.css";
+@import "./components-identity.css";
+@import "./components-ai.css";
+@import "./components-business.css";
+@import "./components-ops.css";
+@import "./components-conversation.css";
+
+/* App-level back-fills: .btn, .icon-btn, .menu, .markdown, filter-bar
+   search-icon, KPI metric — primitives the design system documents but
+   doesn't ship in shared CSS. */
+@import "./app-extras.css";
+
+/* App-shell viewport: the body holds the grid, full height, no scroll on the
+   root — the body region inside .app-shell handles its own scrolling. */
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+}
+
+/* Skip link — Aham a11y rule. Visible only on focus, sits above the shell. */
+.skip-link {
+  position: absolute;
+  left: -9999px;
+  top: auto;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+}
+.skip-link:focus {
+  left: var(--space-4);
+  top: var(--space-4);
+  width: auto;
+  height: auto;
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  z-index: var(--z-skip);
+}

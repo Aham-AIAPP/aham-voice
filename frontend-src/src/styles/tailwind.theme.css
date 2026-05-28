@@ -1,0 +1,131 @@
+/* =============================================================================
+   Aham — Tailwind v4 @theme snippet
+   Drop into your global stylesheet AFTER `@import "tailwindcss"`.
+   Pair with design-tokens.css which provides the runtime CSS variables.
+   ============================================================================= */
+
+@import "tailwindcss";
+@import "./design-tokens.css";
+
+@theme {
+  /* ---------- Color ---------- */
+  --color-canvas:       var(--bg-canvas);
+  --color-surface:      var(--bg-surface);
+  --color-panel:        var(--bg-panel);
+  --color-elevated:     var(--bg-elevated);
+  --color-sunken:       var(--bg-sunken);
+  --color-overlay:      var(--bg-overlay);
+
+  --color-fg:           var(--fg-default);
+  --color-fg-muted:     var(--fg-muted);
+  --color-fg-subtle:    var(--fg-subtle);
+  --color-fg-faint:     var(--fg-faint);
+  --color-fg-inverted:  var(--fg-inverted);
+
+  --color-border:        var(--border-default);
+  --color-border-strong: var(--border-strong);
+
+  --color-accent:        var(--accent-default);
+  --color-accent-hover:  var(--accent-hover);
+  --color-accent-active: var(--accent-active);
+  --color-accent-soft:   var(--accent-soft);
+  --color-accent-fg:     var(--accent-fg);
+
+  --color-success:    var(--success-fg);
+  --color-success-bg: var(--success-bg);
+  --color-warning:    var(--warning-fg);
+  --color-warning-bg: var(--warning-bg);
+  --color-danger:     var(--danger-fg);
+  --color-danger-bg:  var(--danger-bg);
+  --color-info:       var(--info-fg);
+  --color-info-bg:    var(--info-bg);
+
+  /* Brand scales (utility access to raw scales) */
+  --color-clay-50:   var(--clay-50);
+  --color-clay-100:  var(--clay-100);
+  --color-clay-200:  var(--clay-200);
+  --color-clay-300:  var(--clay-300);
+  --color-clay-400:  var(--clay-400);
+  --color-clay-500:  var(--clay-500);
+  --color-clay-600:  var(--clay-600);
+  --color-clay-700:  var(--clay-700);
+  --color-clay-800:  var(--clay-800);
+  --color-clay-900:  var(--clay-900);
+
+  --color-paper-50:  var(--paper-50);
+  --color-paper-100: var(--paper-100);
+  --color-paper-200: var(--paper-200);
+  --color-paper-300: var(--paper-300);
+  --color-paper-400: var(--paper-400);
+  --color-paper-500: var(--paper-500);
+  --color-paper-600: var(--paper-600);
+  --color-paper-700: var(--paper-700);
+  --color-paper-800: var(--paper-800);
+  --color-paper-900: var(--paper-900);
+  --color-paper-950: var(--paper-950);
+
+  /* ---------- Typography ---------- */
+  --font-sans:  var(--font-sans);
+  --font-serif: var(--font-serif);
+  --font-mono:  var(--font-mono);
+
+  --text-2xs:  var(--text-2xs);
+  --text-xs:   var(--text-xs);
+  --text-sm:   var(--text-sm);
+  --text-base: var(--text-base);
+  --text-md:   var(--text-md);
+  --text-lg:   var(--text-lg);
+  --text-xl:   var(--text-xl);
+  --text-2xl:  var(--text-2xl);
+  --text-3xl:  var(--text-3xl);
+  --text-4xl:  var(--text-4xl);
+  --text-5xl:  var(--text-5xl);
+
+  --leading-tight:   var(--leading-tight);
+  --leading-snug:    var(--leading-snug);
+  --leading-normal:  var(--leading-normal);
+  --leading-relaxed: var(--leading-relaxed);
+  --leading-loose:   var(--leading-loose);
+
+  --tracking-tight:  var(--tracking-tight);
+  --tracking-snug:   var(--tracking-snug);
+  --tracking-normal: var(--tracking-normal);
+  --tracking-wide:   var(--tracking-wide);
+  --tracking-caps:   var(--tracking-caps);
+
+  /* ---------- Radii ---------- */
+  --radius-xs:  var(--radius-xs);
+  --radius-sm:  var(--radius-sm);
+  --radius-md:  var(--radius-md);
+  --radius-lg:  var(--radius-lg);
+  --radius-xl:  var(--radius-xl);
+  --radius-2xl: var(--radius-2xl);
+
+  /* ---------- Shadows ---------- */
+  --shadow-xs: var(--shadow-xs);
+  --shadow-sm: var(--shadow-sm);
+  --shadow-md: var(--shadow-md);
+  --shadow-lg: var(--shadow-lg);
+  --shadow-xl: var(--shadow-xl);
+
+  /* ---------- Motion ---------- */
+  --animate-duration-instant: var(--duration-instant);
+  --animate-duration-fast:    var(--duration-fast);
+  --animate-duration-base:    var(--duration-base);
+  --animate-duration-slow:    var(--duration-slow);
+  --animate-duration-slower:  var(--duration-slower);
+
+  --ease-standard: var(--ease-standard);
+  --ease-entrance: var(--ease-entrance);
+  --ease-exit:     var(--ease-exit);
+  --ease-emphasis: var(--ease-emphasis);
+
+  /* ---------- Containers ---------- */
+  --container-prose:    var(--container-prose);
+  --container-readable: var(--container-readable);
+  --container-narrow:   var(--container-narrow);
+  --container-app:      var(--container-app);
+}
+
+/* Dark-mode variant — Tailwind v4 `@custom-variant` */
+@custom-variant dark (&:where(.dark, .dark *));

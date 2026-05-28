@@ -1,0 +1,865 @@
+/* =============================================================================
+   Aham Design System · App shell + page templates (v2.4)
+   -----------------------------------------------------------------------------
+   The layer the system was missing: not what individual components look like,
+   but how every page is *framed*. v2.4 makes page-to-page consistency a
+   structural property of the system instead of a memory test.
+
+     · .app-shell             3-region layout (sidebar · topbar · body)
+     · .app-shell__sidebar    fixed-width left nav
+     · .nav-section           grouped nav rows
+     · .nav-item              one nav row
+     · .app-shell__topbar     56px wordmark + utilities
+     · .app-shell__body       the scrollable main column
+     · .breadcrumb            crumb trail above every non-landing page-head
+     · .page-head             title + subtitle + actions slot (4-region grid)
+     · .empty-state           full-page empty placeholder (one sentence)
+     · .page-loading          page-level skeleton scaffold
+     · .page--*               three page templates, applied as a class on body
+
+   Load AFTER design-tokens.css and components-ai.css. Uses tokens only.
+   ============================================================================= */
+
+
+/* =============================================================================
+   GLOBAL FOCUS RING — promoted to a system-wide rule in v2.4
+   -----------------------------------------------------------------------------
+   Every focusable element gets the same 2px accent ring. No per-component
+   overrides. Hover doesn't draw a ring; focus does.
+   ============================================================================= */
+
+:focus-visible {
+  outline: 2px solid var(--accent-default);
+  outline-offset: 2px;
+  border-radius: inherit;
+}
+/* Inputs / textareas already carry a focus border — suppress the ring there
+   so it doesn't double up. */
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  outline: none;
+}
+
+
+/* =============================================================================
+   APP-SHELL — sidebar + topbar + body
+   -----------------------------------------------------------------------------
+   Layout-only. No new color, no new tone. The shell exists so the content
+   column's origin (x and width) is identical on every page, which is the
+   precondition for `.page-head` and `.page-body` to read as consistent.
+   ============================================================================= */
+
+.app-shell {
+  display: grid;
+  grid-template-columns: var(--shell-sidebar-w) 1fr;
+  grid-template-rows: var(--shell-topbar-h) 1fr;
+  grid-template-areas:
+    "sidebar topbar"
+    "sidebar body";
+  min-height: 100vh;
+  background: var(--bg-canvas);
+}
+
+/* --- sidebar --- */
+.app-shell__sidebar {
+  grid-area: sidebar;
+  background: var(--bg-surface);
+  border-right: 1px solid var(--border-default);
+  display: grid;
+  grid-template-rows: var(--shell-topbar-h) 1fr var(--shell-account-h);
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  z-index: var(--z-shell);
+}
+.app-shell__brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-5);
+  border-bottom: 1px solid var(--border-default);
+  font-size: var(--text-base);
+  color: var(--fg-default);
+  font-weight: var(--weight-semibold);
+  letter-spacing: -0.01em;
+}
+.app-shell__brand-glyph {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-default);
+  color: var(--accent-fg);
+  display: grid;
+  place-items: center;
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 16px;
+  font-weight: var(--weight-semibold);
+  flex: none;
+}
+.app-shell__brand em {
+  font-family: var(--font-serif);
+  font-weight: var(--weight-regular);
+  color: var(--fg-muted);
+  font-size: var(--text-sm);
+  margin-left: var(--space-1);
+}
+
+.app-shell__sidebar-nav {
+  overflow-y: auto;
+  padding: var(--space-4) var(--space-3) var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+/* --- nav section (group label + items, optionally with a subgroup eyebrow) */
+.nav-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.nav-section__title {
+  padding: 0 var(--space-3) var(--space-1);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-subtle);
+}
+/* Sub-eyebrow inside a section (e.g. "业务对象" inside "CRM 目录") */
+.nav-section__sub {
+  padding: var(--space-2) var(--space-3) var(--space-1);
+  font-size: var(--text-2xs);
+  color: var(--fg-faint);
+}
+
+.nav-item {
+  display: grid;
+  grid-template-columns: 16px 1fr auto;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  text-decoration: none;
+  color: var(--fg-muted);
+  font-size: var(--text-sm);
+  line-height: 1.4;
+  transition: background var(--duration-fast) var(--ease-standard);
+}
+.nav-item:hover { background: var(--fill-subtle); color: var(--fg-default); }
+.nav-item.is-active {
+  background: var(--fill-muted);
+  color: var(--fg-default);
+  font-weight: var(--weight-medium);
+}
+.nav-item.is-active .nav-item__icon { color: var(--accent-default); }
+.nav-item.is-disabled,
+.nav-item[aria-disabled="true"] {
+  color: var(--fg-faint);
+  pointer-events: none;
+}
+
+.nav-item__icon {
+  width: 16px;
+  height: 16px;
+  color: var(--fg-subtle);
+  display: grid;
+  place-items: center;
+  flex: none;
+}
+.nav-item__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nav-item__count {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--fg-subtle);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+  flex: none;
+  min-width: 16px;
+  text-align: right;
+}
+.nav-item.is-disabled .nav-item__count { color: var(--fg-faint); }
+
+/* --- account block at the bottom of the sidebar --- */
+.app-shell__account {
+  display: grid;
+  grid-template-columns: 32px 1fr auto;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 0 var(--space-4);
+  border-top: 1px solid var(--border-default);
+}
+.app-shell__account-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  background: var(--fill-muted);
+  display: grid;
+  place-items: center;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--fg-muted);
+}
+.app-shell__account-name {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--fg-default);
+  line-height: 1.2;
+}
+.app-shell__account-role {
+  display: block;
+  font-size: var(--text-xs);
+  color: var(--fg-subtle);
+  font-weight: var(--weight-regular);
+  margin-top: 1px;
+}
+.app-shell__account-menu {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  padding: 4px 6px;
+  color: var(--fg-subtle);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-base);
+  line-height: 1;
+}
+.app-shell__account-menu:hover { background: var(--fill-subtle); color: var(--fg-default); }
+
+
+/* --- topbar --- */
+.app-shell__topbar {
+  grid-area: topbar;
+  background: color-mix(in oklch, var(--bg-canvas) 92%, transparent);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--border-default);
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 0 var(--space-6) 0 var(--space-6);
+  position: sticky;
+  top: 0;
+  z-index: var(--z-shell);
+}
+.app-shell__topbar-breadcrumb { flex: 1; min-width: 0; }
+.app-shell__topbar-utils {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.app-shell__topbar-utils .btn,
+.app-shell__topbar-utils button {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  background: transparent;
+  border: 0;
+  color: var(--fg-muted);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+}
+.app-shell__topbar-utils button:hover { background: var(--fill-subtle); color: var(--fg-default); }
+
+/* --- body --- */
+.app-shell__body {
+  grid-area: body;
+  overflow-y: auto;
+  position: relative;
+}
+
+
+/* =============================================================================
+   BREADCRUMB — the one shape, lives in the topbar
+   -----------------------------------------------------------------------------
+   v2.4 fixes the breadcrumb's placement: it sits in the topbar, not in the
+   page-head. That way the topbar always tells you where you are, and the
+   page-head can stay focused on title + actions.
+
+   Rules:
+     · Max 4 segments. If you need 5, your IA is too deep.
+     · Separator is "/" with `--fg-faint`. Never " > " or " · ".
+     · Last segment is the current page — `--fg-default`, not a link.
+     · Earlier segments are `--fg-muted`, underline-on-hover.
+     · The brand is NOT a breadcrumb segment. (The sidebar already roots you.)
+   ============================================================================= */
+
+.breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--fg-muted);
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.breadcrumb__sep {
+  color: var(--fg-faint);
+  font-weight: var(--weight-regular);
+  user-select: none;
+}
+.breadcrumb a {
+  color: var(--fg-muted);
+  text-decoration: none;
+  border-radius: var(--radius-sm);
+}
+.breadcrumb a:hover { color: var(--fg-default); text-decoration: underline; text-underline-offset: 3px; }
+.breadcrumb__current {
+  color: var(--fg-default);
+  font-weight: var(--weight-medium);
+}
+
+
+/* =============================================================================
+   PAGE-HEAD — the one shape for every page's opening
+   -----------------------------------------------------------------------------
+   Four regions in a fixed grid:
+
+     ┌──────────────────────────────────────────────────┐
+     │ TITLE (h1)                          ACTIONS slot │
+     │ SUBTITLE                                          │
+     └──────────────────────────────────────────────────┘
+
+   The actions slot is ALWAYS rendered. When the page has no actions, it
+   carries one of two things instead:
+     - a "只读" mark (for read-only pages — e.g. 正式客户 mastered in Kingdee)
+     - nothing visible, but its width is reserved (~120px) so the title's
+       vertical position stays stable page-to-page.
+
+   Subtitle uses `text-wrap: pretty` and a content-page width — same width
+   as the body grid below — so it stops wrapping at 32ch while the table
+   below it runs to the viewport.
+   ============================================================================= */
+
+.page-body {
+  width: var(--container-page);
+  margin: 0 auto;
+  padding: var(--space-8) 0 var(--space-16);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+.page-body--narrow { width: var(--container-page-narrow); }
+
+.page-head {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-areas:
+    "title actions"
+    "subtitle actions";
+  gap: var(--space-2) var(--space-6);
+  align-items: start;
+}
+.page-head__title {
+  grid-area: title;
+  font-size: var(--text-3xl);
+  font-weight: var(--weight-semibold);
+  letter-spacing: -0.015em;
+  color: var(--fg-default);
+  margin: 0;
+  line-height: var(--leading-tight);
+}
+.page-head__subtitle {
+  grid-area: subtitle;
+  font-size: var(--text-sm);
+  color: var(--fg-muted);
+  line-height: var(--leading-relaxed);
+  margin: 0;
+  text-wrap: pretty;
+  max-width: 64ch;
+}
+.page-head__actions {
+  grid-area: actions;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 120px;        /* preserves slot width when empty */
+  min-height: 32px;        /* preserves slot height when empty */
+  justify-content: flex-end;
+  align-self: start;
+  /* Vertical centering across the title row */
+  margin-top: 6px;
+}
+.page-head__actions:empty::after {
+  /* Invisible filler so the column reserves space when there are no actions */
+  content: "";
+  display: block;
+  width: 1px;
+  height: 32px;
+}
+
+/* Read-only modifier — the actions slot carries a single muted mark instead
+   of buttons. Used on pages whose data is mastered elsewhere (Kingdee, etc). */
+.page-head[data-readonly] .page-head__actions {
+  /* If the host didn't render the readonly mark, synthesize one. The host
+     should usually render its own .status--muted with explanatory text. */
+}
+.page-head__readonly {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--fg-subtle);
+}
+.page-head__readonly::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--fg-muted);
+  flex: none;
+}
+
+
+/* =============================================================================
+   EMPTY-STATE — the one shape for "this page has no data yet"
+   -----------------------------------------------------------------------------
+   Centered in the page-body region. One sentence describing what's missing,
+   one optional ghost button leading to the action that fills it. No
+   illustration, no big icon, no marketing copy.
+
+   The empty-state is for the *whole page being empty* — not for an
+   empty filter result inside a populated list. Filter results use the list's
+   own empty-state row (`<li class="empty">`).
+   ============================================================================= */
+
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: var(--space-16) var(--space-6);
+  gap: var(--space-3);
+  color: var(--fg-muted);
+}
+.empty-state__title {
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
+  color: var(--fg-default);
+  margin: 0;
+  max-width: 48ch;
+  text-wrap: balance;
+}
+.empty-state__body {
+  font-size: var(--text-sm);
+  color: var(--fg-muted);
+  margin: 0;
+  max-width: 56ch;
+  line-height: var(--leading-relaxed);
+  text-wrap: pretty;
+}
+.empty-state__actions {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+
+/* =============================================================================
+   PAGE-LOADING — the one skeleton scaffold for an initial page load
+   -----------------------------------------------------------------------------
+   Replaces the page-head + content with placeholder bars matching the same
+   geometry. No spinner. No "Loading…" text. Lasts ≤ 600ms in practice; if
+   your data takes longer, you have a different problem and need .task progress.
+   ============================================================================= */
+
+.page-loading {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  width: var(--container-page);
+  margin: 0 auto;
+  padding: var(--space-8) 0;
+}
+.page-loading__bar {
+  background: var(--bg-panel);
+  border-radius: var(--radius-sm);
+  position: relative;
+  overflow: hidden;
+}
+.page-loading__bar::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent 0,
+    var(--fill-subtle) 50%,
+    transparent 100%
+  );
+  animation: page-loading-shimmer 1.4s linear infinite;
+}
+.page-loading__bar--title    { height: 32px; width: 30%; }
+.page-loading__bar--subtitle { height: 14px; width: 45%; }
+.page-loading__bar--row      { height: 56px; width: 100%; }
+.page-loading__bar--card     { height: 144px; width: 100%; }
+@keyframes page-loading-shimmer {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+
+/* =============================================================================
+   PAGE TEMPLATES — applied as a class on .app-shell__body
+   -----------------------------------------------------------------------------
+   Three templates. Every page in the system belongs to exactly one. The
+   class doesn't add visual styling beyond what its components already provide;
+   it exists so the host (and the developer reading the code) can name the
+   page's shape explicitly.
+
+     .page--landing        /work — greeting + action-tile grid
+     .page--object-index   list pages (leads, customers, opportunities, etc.)
+     .page--object-detail  single-record pages
+   ============================================================================= */
+
+.page--landing .page-body {
+  /* The landing page centers its action-tile grid in the viewport — the
+     greeting sits above, the dock floats below. The grid stops at 880px
+     because tiles aren't dense enough to grid wider. */
+  width: min(880px, 100% - 2 * var(--space-10));
+  padding-top: var(--space-12);
+}
+.page--landing .page-head__title {
+  /* Landing greeting is intentionally less assertive than an index title */
+  font-size: var(--text-2xl);
+  font-weight: var(--weight-medium);
+}
+.page--landing .page-head { grid-template-areas: "title actions"; }
+.page--landing .page-head__subtitle { display: none; }
+
+.page--object-index .page-body {
+  /* Index pages get the full page container */
+  width: var(--container-page);
+}
+
+.page--object-detail .page-body {
+  width: var(--container-page);
+}
+
+
+/* =============================================================================
+   v2.5 — CONVERSATION LAYOUTS
+   -----------------------------------------------------------------------------
+   Two new templates that own the surface (the conversation IS the page),
+   not the surface owning a dock that hosts a conversation.
+
+     .page--conversation   Full-page chat (claude.ai-style focus mode).
+                           Used for /work/conversation/:id.
+
+     .page--split-panel    Left main content + right AI rail. Used when the
+                           conversation is *about* a specific business object.
+                           E.g. /crm/leads/南都电源 with an open conversation rail.
+
+   Hard rule: when either template is active, the global .workspace-dock is
+   hidden. The page already hosts an AI input; a second one would be a
+   duplicate AI entry — banned by v2.3 checklist item #3.
+   ============================================================================= */
+
+
+/* --- hide the global dock on conversation surfaces -------------------- */
+.page--conversation ~ .workspace-dock,
+.page--conversation .workspace-dock,
+.page--split-panel  ~ .workspace-dock,
+.page--split-panel  .workspace-dock {
+  display: none !important;
+}
+
+
+/* =============================================================================
+   .page--conversation — full-page chat
+   -----------------------------------------------------------------------------
+   The body is a flex column:
+     · .conversation__head      small head with title + context badges
+     · .conversation__stream    scrollable message stream, centered 720px
+     · .conversation__composer  sticky composer, centered 720px
+
+   Empty state (no messages yet): the stream centers a greeting + starter
+   prompts vertically, composer stays anchored at the bottom.
+   ============================================================================= */
+
+.page--conversation {
+  /* The body becomes a vertical layout with the composer anchored at bottom.
+     Override the default .app-shell__body scroll: the *stream* scrolls
+     internally, not the whole body. */
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+.page--conversation .page-body { display: none; }
+
+/* --- head: compact, ~48px, single line ------------------------------- */
+.conversation__head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  height: 48px;
+  padding: 0 var(--space-6);
+  border-bottom: 1px solid var(--border-default);
+}
+.conversation__title {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--fg-default);
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1;
+}
+.conversation__context {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 2px 8px;
+  background: var(--bg-panel);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+  flex: none;
+}
+.conversation__context .type {
+  color: var(--fg-subtle);
+  font-weight: var(--weight-regular);
+}
+.conversation__menu {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  padding: 4px 8px;
+  color: var(--fg-subtle);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-base);
+  line-height: 1;
+  flex: none;
+}
+.conversation__menu:hover { background: var(--fill-subtle); color: var(--fg-default); }
+
+/* --- stream: scrollable, centered 720px ------------------------------- */
+.conversation__stream {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-6) 0;
+}
+.conversation__stream-inner {
+  width: min(var(--conversation-stream-w), 100% - 2 * var(--space-6));
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+/* Empty state — greeting + starter prompts vertically centered above
+   the composer. The host adds `.is-empty` when there are no messages yet. */
+.conversation__stream.is-empty { display: grid; place-items: center; }
+.conversation__stream.is-empty .conversation__stream-inner {
+  text-align: center;
+  gap: var(--space-6);
+}
+.conversation__greeting {
+  font-size: var(--text-2xl);
+  font-weight: var(--weight-medium);
+  color: var(--fg-default);
+  letter-spacing: -0.01em;
+  margin: 0;
+  line-height: var(--leading-tight);
+}
+.conversation__greeting em {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-weight: var(--weight-regular);
+  color: var(--fg-muted);
+}
+.conversation__stream.is-empty .starter-prompts {
+  justify-content: center;
+}
+
+/* --- composer: sticky bottom, centered 720px -------------------------- */
+.conversation__composer {
+  flex: none;
+  padding: var(--space-4) 0 var(--space-5);
+  background: var(--bg-canvas);
+  border-top: 1px solid var(--border-default);
+}
+.conversation__composer-inner {
+  width: min(var(--conversation-stream-w), 100% - 2 * var(--space-6));
+  margin: 0 auto;
+}
+
+
+/* =============================================================================
+   .page--split-panel — left main content + right AI rail
+   -----------------------------------------------------------------------------
+   The body becomes a 2-column grid. The main column hosts any page-template
+   inside it (page-head + filter-bar + table, or obj-head + timeline, etc.).
+   The right rail is a dedicated AI conversation column with its own head,
+   stream, and composer.
+
+   Three rail states:
+     default            ~420px, expanded
+     .is-collapsed      40px sliver showing vertical "对话" affordance
+     .is-closed         display: none; main column reflows to full width
+
+   The rail is NOT overlay. It's a split column. Main content reflows; nothing
+   gets occluded. The "floating" feel comes from a hairline left border + a
+   soft inset shadow on the left edge, not from absolute positioning.
+   ============================================================================= */
+
+.page--split-panel {
+  display: grid;
+  grid-template-columns: 1fr var(--split-rail-w);
+  height: 100%;
+  overflow: hidden;
+}
+.page--split-panel:has(.split-panel__rail.is-collapsed) {
+  grid-template-columns: 1fr var(--split-rail-w-collapsed);
+}
+.page--split-panel:has(.split-panel__rail.is-closed) {
+  grid-template-columns: 1fr 0;
+}
+
+/* --- main column ------------------------------------------------------ */
+.split-panel__main {
+  overflow-y: auto;
+  min-width: 0;
+  /* The page-body inside this column uses its own container; we don't
+     override it. But we DO tighten the page container so it can breathe
+     in the narrower column. */
+}
+.split-panel__main .page-body {
+  /* Override container-page to fit the reduced main column */
+  width: min(var(--container-page), 100% - 2 * var(--space-8));
+}
+
+/* --- rail ------------------------------------------------------------- */
+.split-panel__rail {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-canvas);
+  border-left: 1px solid var(--border-default);
+  /* Soft inset shadow on the left edge — the "floating board" effect.
+     Subtle: 4px wide, low opacity, no spread. */
+  box-shadow: inset 4px 0 8px -4px oklch(0 0 0 / 0.04);
+  overflow: hidden;
+  min-width: 0;
+  transition: width var(--duration-base) var(--ease-standard);
+}
+
+/* --- rail · collapsed sliver ----------------------------------------- */
+.split-panel__rail.is-collapsed {
+  align-items: stretch;
+}
+.split-panel__rail.is-collapsed > * { display: none; }
+.split-panel__rail.is-collapsed::before {
+  content: "对话";
+  writing-mode: vertical-rl;
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  font-size: var(--text-xs);
+  color: var(--fg-subtle);
+  letter-spacing: 0.4em;
+  cursor: pointer;
+  background: var(--bg-surface);
+}
+.split-panel__rail.is-collapsed:hover::before {
+  background: var(--fill-subtle);
+  color: var(--fg-default);
+}
+
+/* --- rail · closed --------------------------------------------------- */
+.split-panel__rail.is-closed {
+  display: none;
+}
+
+
+/* =============================================================================
+   PANEL HEAD — shared between .conversation__head and .split-panel__rail
+   -----------------------------------------------------------------------------
+   The rail uses .panel__head for its top region (context badge + close).
+   Keeping it as a separate class so the rail head and the full-page
+   conversation head don't drift apart visually.
+   ============================================================================= */
+
+.panel__head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  height: 48px;
+  padding: 0 var(--space-4);
+  border-bottom: 1px solid var(--border-default);
+}
+.panel__title {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--fg-default);
+  margin: 0;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.panel__context {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 2px 8px;
+  background: var(--bg-panel);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+  flex: none;
+}
+.panel__context .type { color: var(--fg-subtle); }
+
+.panel__close,
+.panel__collapse {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  color: var(--fg-subtle);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  flex: none;
+  font-size: var(--text-base);
+  line-height: 1;
+}
+.panel__close:hover,
+.panel__collapse:hover { background: var(--fill-subtle); color: var(--fg-default); }
+
+.panel__stream {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+.panel__composer {
+  flex: none;
+  padding: var(--space-3) var(--space-4) var(--space-4);
+  border-top: 1px solid var(--border-default);
+  background: var(--bg-canvas);
+}

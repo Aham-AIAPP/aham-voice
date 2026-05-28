@@ -1,0 +1,324 @@
+/* =============================================================================
+   Aham Design System · Identity & access (v2.1)
+   -----------------------------------------------------------------------------
+   Form primitives, auth surface, and destructive confirmation.
+
+     · .form-row         labeled form row (primitive; used everywhere)
+     · .field--secret    masked secret input variant
+     · .field--copy      input with trailing copy button
+     · .auth-shell       full-viewport surface for login / register / reset
+     · .auth-form        the centered form card itself
+     · .danger-confirm   destructive confirmation modal pattern
+   ============================================================================= */
+
+
+/* =============================================================================
+   FORM-ROW — labeled form row primitive
+   -----------------------------------------------------------------------------
+   The label + control + helper block that was missing from base.
+   Composes any input (field, textarea, select, checkbox row, radio group).
+   ============================================================================= */
+
+.form-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.form-row__label {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--fg-default);
+  line-height: var(--leading-snug);
+}
+.form-row__label .req {
+  color: var(--danger-fg);
+  margin-left: 2px;
+}
+.form-row__label .opt {
+  margin-left: 6px;
+  font-weight: var(--weight-regular);
+  font-size: var(--text-xs);
+  color: var(--fg-subtle);
+}
+.form-row__help {
+  font-size: var(--text-xs);
+  color: var(--fg-subtle);
+  margin: 0;
+  line-height: var(--leading-relaxed);
+  text-wrap: pretty;
+}
+.form-row.has-error .form-row__help { color: var(--danger-fg); }
+.form-row.has-error .field,
+.form-row.has-error textarea { border-color: var(--danger-fg); }
+
+/* Horizontal variant — label on the left (settings-style) */
+.form-row--horizontal {
+  display: grid;
+  grid-template-columns: 180px 1fr;
+  align-items: baseline;
+  gap: var(--space-3) var(--space-5);
+}
+.form-row--horizontal .form-row__help {
+  grid-column: 2;
+}
+
+/* Inline group — multiple controls on one line (e.g. price + unit) */
+.form-row__group {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.form-row__group .field { flex: 1; min-width: 0; }
+.form-row__group .unit {
+  font-size: var(--text-sm);
+  color: var(--fg-subtle);
+  white-space: nowrap;
+}
+
+/* Form section — grouping multiple form rows under one eyebrow */
+.form-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-5) 0;
+}
+.form-section + .form-section {
+  border-top: 1px solid var(--border-default);
+}
+.form-section__title {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-subtle);
+  margin: 0 0 var(--space-2);
+}
+
+
+/* =============================================================================
+   FIELD VARIANTS — secret, copy
+   -----------------------------------------------------------------------------
+   Modifier classes on the existing .field. No new components.
+   ============================================================================= */
+
+.field--secret {
+  font-family: var(--font-mono);
+  letter-spacing: 0.06em;
+}
+.field--secret::placeholder { letter-spacing: 0; }
+
+/* Wrapper for a field with a trailing button (copy / paste / regenerate) */
+.field-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.field-wrap > .field { padding-right: 60px; flex: 1; min-width: 0; }
+.field-wrap__btn {
+  position: absolute;
+  right: 4px; top: 50%;
+  transform: translateY(-50%);
+  height: 24px;
+  padding: 0 var(--space-2);
+  background: transparent;
+  border: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--fg-subtle);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+.field-wrap__btn:hover { background: var(--fill-subtle); color: var(--fg-default); }
+.field-wrap__btn.is-copied { color: var(--success-fg); }
+.field-wrap__btn.is-copied::after { content: " ✓"; }
+
+
+/* =============================================================================
+   AUTH SHELL & FORM — login / register / reset password / first-run setup
+   -----------------------------------------------------------------------------
+   A surface deliberately distinct from the in-app shell: centered, no sidebar,
+   no nav, no AI dock. The user is not yet a user.
+   ============================================================================= */
+
+.auth-shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-12) var(--space-6);
+  background: var(--bg-canvas);
+}
+.auth-shell__brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-12);
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  color: var(--fg-default);
+  letter-spacing: var(--tracking-snug);
+}
+.auth-shell__brand .brand-mark {
+  width: 32px; height: 32px;
+  background: var(--accent-default);
+  color: var(--accent-fg);
+  border-radius: var(--radius-md);
+  display: grid; place-items: center;
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-weight: var(--weight-semibold);
+}
+
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  width: 100%;
+  max-width: 360px;
+  /* No card chrome — the form sits directly on canvas. The page is the card. */
+}
+.auth-form__title {
+  font-size: var(--text-2xl);
+  font-weight: var(--weight-semibold);
+  letter-spacing: -0.015em;
+  margin: 0;
+  text-wrap: balance;
+  color: var(--fg-default);
+}
+.auth-form__title em {
+  font-family: var(--font-serif);
+  font-style: italic;
+  color: var(--accent-default);
+  font-weight: var(--weight-regular);
+}
+.auth-form__lede {
+  margin: calc(-1 * var(--space-2)) 0 0;
+  font-size: var(--text-sm);
+  color: var(--fg-muted);
+  line-height: var(--leading-relaxed);
+}
+.auth-form__primary {
+  margin-top: var(--space-2);
+}
+.auth-form__alt {
+  margin: var(--space-2) 0 0;
+  font-size: var(--text-xs);
+  color: var(--fg-subtle);
+  text-align: center;
+  line-height: var(--leading-relaxed);
+}
+.auth-form__alt a {
+  color: var(--fg-default);
+  text-decoration: underline;
+  text-decoration-color: var(--border-strong);
+  text-underline-offset: 2px;
+}
+.auth-form__alt a:hover { text-decoration-color: var(--fg-default); }
+
+/* Inline non-blocking error message above the submit button */
+.auth-form .diag {
+  margin: calc(-1 * var(--space-1)) 0;
+}
+
+
+/* =============================================================================
+   DANGER-CONFIRM — destructive confirmation modal pattern
+   -----------------------------------------------------------------------------
+   Distinct from .confirm-card (which is for AI writes). This one is for
+   the user choosing to do something irreversible: delete user, revoke
+   permissions, deactivate account, wipe data, purge logs.
+
+   Required structure:
+     · title states the action and its target
+     · body states the consequence in plain language
+     · type-to-confirm input for the hardest tier
+     · single danger primary; the cancel is the safe path
+
+   Sub-tiers via attr [data-tier]:
+     "soft"   no type-to-confirm; just a danger button (logout, archive)
+     "hard"   type-to-confirm required (delete user, drop record)
+     "nuclear" type-to-confirm + checked checkbox (purge, wipe)
+   ============================================================================= */
+
+.danger-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-6);
+  background: var(--bg-elevated, var(--bg-canvas));
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-xl);
+  max-width: 480px;
+  width: 100%;
+}
+.danger-confirm__title {
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  letter-spacing: -0.005em;
+  color: var(--fg-default);
+  margin: 0;
+  text-wrap: balance;
+}
+.danger-confirm__body {
+  font-size: var(--text-sm);
+  color: var(--fg-muted);
+  line-height: var(--leading-relaxed);
+  text-wrap: pretty;
+  margin: 0;
+}
+.danger-confirm__body strong { color: var(--fg-default); font-weight: var(--weight-medium); }
+.danger-confirm__consequences {
+  list-style: none;
+  margin: 0;
+  padding: var(--space-3) 0 0;
+  border-top: 1px solid var(--border-default);
+  font-size: var(--text-sm);
+  color: var(--fg-muted);
+}
+.danger-confirm__consequences > li {
+  position: relative;
+  padding-left: var(--space-5);
+  margin-top: var(--space-2);
+  line-height: var(--leading-relaxed);
+}
+.danger-confirm__consequences > li:first-child { margin-top: 0; }
+.danger-confirm__consequences > li::before {
+  content: "—";
+  position: absolute;
+  left: 0;
+  color: var(--fg-subtle);
+}
+
+/* Type-to-confirm input */
+.danger-confirm__verify {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  background: var(--bg-panel);
+  border-radius: var(--radius-md);
+}
+.danger-confirm__verify-label {
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+  line-height: var(--leading-relaxed);
+}
+.danger-confirm__verify-label code {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  background: var(--bg-canvas);
+  padding: 1px 6px;
+  border-radius: 3px;
+  color: var(--danger-fg);
+  font-weight: var(--weight-medium);
+}
+
+.danger-confirm__actions {
+  display: flex;
+  gap: var(--space-2);
+  justify-content: flex-end;
+  margin-top: var(--space-2);
+}

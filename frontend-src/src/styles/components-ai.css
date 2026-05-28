@@ -1,0 +1,719 @@
+/* =============================================================================
+   Aham Design System · AI-native patterns (v2 additions)
+   -----------------------------------------------------------------------------
+   Tier 1 anchor components for AI-native product surfaces.
+
+     1. .confirm-card        AI extraction → user confirmation → write-through
+     2. .prov                Provenance + confidence inline mark
+     3. .workspace-dock      Global AI work entry point (3 modes)
+     4. .relation-picker     Cross-type object association selector
+
+   Load AFTER design-tokens.css and colors_and_type.css. No new tokens —
+   everything reads from the existing token surface.
+   ============================================================================= */
+
+
+/* =============================================================================
+   1. CONFIRM CARD — the AI write-through unit
+   -----------------------------------------------------------------------------
+   The single official shape for "AI extracted these fields, confirm to write".
+   Used everywhere a write goes through user judgement: follow-up extraction,
+   status transition, lead → customer conversion, briefing field correction,
+   any local-or-Kingdee write.
+
+   States:
+     default        (no class)         pending user confirmation
+     .is-writing                       confirm clicked, request in flight
+     .is-success                       written; card collapses to one-line stub
+     .has-error                        write failed; diagnostic row at top
+     .confirm-card--chained            visually attaches to a previous card
+                                       (used for lead → customer → opportunity)
+   ============================================================================= */
+
+.confirm-card {
+  --cc-radius: var(--radius-lg);
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-canvas);
+  border: 1px solid var(--border-default);
+  border-radius: var(--cc-radius);
+  box-shadow: var(--shadow-sm);
+  max-width: 64ch;
+  overflow: hidden;
+  transition:
+    border-color var(--duration-base) var(--ease-standard),
+    background   var(--duration-base) var(--ease-standard),
+    opacity      var(--duration-base) var(--ease-standard);
+}
+
+/* --- head -------------------------------------------------------------- */
+.confirm-card__head {
+  padding: var(--space-4) var(--space-5) var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border-bottom: 1px solid var(--border-default);
+}
+.confirm-card__title {
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
+  color: var(--fg-default);
+  letter-spacing: -0.005em;
+}
+.confirm-card__target {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--fg-subtle);
+}
+
+/* --- fields ------------------------------------------------------------ */
+.confirm-card__fields {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.confirm-card__fields > li {
+  display: grid;
+  grid-template-columns: 96px 1fr auto;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-5);
+  border-bottom: 1px solid var(--border-subtle, var(--border-default));
+  align-items: baseline;
+  min-height: 40px;
+}
+.confirm-card__fields > li:last-child { border-bottom: 0; }
+
+.confirm-card__fields .ccf-label {
+  font-size: var(--text-xs);
+  color: var(--fg-subtle);
+  text-transform: none;
+  letter-spacing: 0;
+  white-space: nowrap;
+  padding-top: 2px;
+}
+.confirm-card__fields .ccf-value {
+  font-size: var(--text-sm);
+  color: var(--fg-default);
+  line-height: var(--leading-relaxed);
+  text-wrap: pretty;
+  min-width: 0;
+}
+.confirm-card__fields .ccf-value[contenteditable="true"] {
+  outline: none;
+  border-bottom: 1px dashed var(--border-strong);
+  padding-bottom: 1px;
+  cursor: text;
+}
+.confirm-card__fields .ccf-value[contenteditable="true"]:focus {
+  border-bottom-color: var(--accent-default);
+}
+.confirm-card__fields .ccf-value--empty { color: var(--fg-faint); font-style: italic; }
+.confirm-card__fields .ccf-prov {
+  justify-self: end;
+  align-self: baseline;
+}
+
+/* --- actions ----------------------------------------------------------- */
+.confirm-card__actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-5);
+  background: var(--bg-panel);
+  border-top: 1px solid var(--border-default);
+}
+.confirm-card__actions .spacer { margin-right: auto; }
+
+/* --- state · writing --------------------------------------------------- */
+.confirm-card.is-writing {
+  pointer-events: none;
+}
+.confirm-card.is-writing .confirm-card__head,
+.confirm-card.is-writing .confirm-card__fields { opacity: 0.55; }
+
+/* --- state · success --------------------------------------------------- */
+.confirm-card.is-success {
+  border-color: var(--border-default);
+  background: var(--bg-panel);
+  opacity: 0.78;
+}
+.confirm-card.is-success .confirm-card__title::before {
+  content: "已完成 · ";
+  color: var(--success-fg);
+  font-weight: var(--weight-medium);
+}
+.confirm-card.is-success .confirm-card__fields,
+.confirm-card.is-success .confirm-card__actions { display: none; }
+.confirm-card.is-success .confirm-card__head {
+  border-bottom: 0;
+  padding-bottom: var(--space-4);
+}
+
+/* --- state · error ----------------------------------------------------- */
+.confirm-card.has-error {
+  border-color: var(--danger-fg);
+}
+.confirm-card__error {
+  display: none;
+  padding: var(--space-3) var(--space-5);
+  background: var(--danger-bg);
+  border-bottom: 1px solid var(--border-default);
+  font-size: var(--text-sm);
+  color: var(--fg-default);
+  line-height: var(--leading-relaxed);
+}
+.confirm-card.has-error .confirm-card__error { display: block; }
+.confirm-card__error .code {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--danger-fg);
+  margin-right: var(--space-2);
+}
+
+/* --- chained ----------------------------------------------------------- */
+.confirm-card + .confirm-card.confirm-card--chained {
+  margin-top: calc(-1 * var(--space-2));
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+  border-top: 1px dashed var(--border-default);
+}
+
+
+/* =============================================================================
+   2. PROVENANCE MARK — where did this value come from, how confident
+   -----------------------------------------------------------------------------
+   Inline, plain-text marker. Five sources only. Three confidence levels
+   (high is silent — the absence of a confidence note means "trustworthy").
+
+   Sources (data-source):  kingdee · local · bocha · llm · user
+   Confidence:             high (silent) · medium ("中") · low ("低" + warning fg)
+
+   Visual rules:
+     · Always plain text, never a colored chip background.
+     · Source token uses --fg-subtle; confidence "低" uses --warning-fg text only.
+     · Mono font keeps it compact and distinguishable from prose.
+     · Hover reveals evidence tooltip via the native title attribute.
+   ============================================================================= */
+
+.prov {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-regular);
+  color: var(--fg-subtle);
+  white-space: nowrap;
+  letter-spacing: 0;
+  line-height: 1;
+  cursor: help;
+}
+.prov::before {
+  content: "";
+  display: inline-block;
+  width: 5px; height: 5px;
+  border-radius: 999px;
+  background: var(--fg-faint);
+  flex: none;
+  align-self: center;
+}
+
+.prov[data-source="kingdee"]::before { background: var(--accent-default); }
+.prov[data-source="local"]::before   { background: var(--fg-muted); }
+.prov[data-source="bocha"]::before   { background: var(--info-fg); }
+.prov[data-source="llm"]::before     { background: var(--fg-faint); }
+.prov[data-source="user"]::before    { background: var(--success-fg); }
+
+/* Confidence — appended inside the same span. "中"/"低" only; "高" is silent */
+.prov__conf {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--fg-subtle);
+}
+.prov__conf--low { color: var(--warning-fg); }
+
+
+/* =============================================================================
+   3. WORKSPACE DOCK — global AI work entry point
+   -----------------------------------------------------------------------------
+   The single official shell for the AI work entry. Three modes only.
+
+     data-mode="dock"   bottom strip, 56px collapsed, expands on focus
+     data-mode="panel"  right-side persistent panel (~480px)
+     data-mode="focus"  full-takeover for a single deep task
+
+   Always carries:
+     · Optional .dock__context badge ("当前：南都电源 · 线索")
+     · A .composer (the existing one)
+     · Optional .dock__pending stub showing the user has unconfirmed cards
+     · Optional .dock__diag one-liner for current external-API failure
+   ============================================================================= */
+
+.workspace-dock {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-canvas);
+  border: 1px solid var(--border-default);
+  box-shadow: var(--shadow-md);
+  font-family: var(--font-sans);
+}
+
+.workspace-dock[data-mode="dock"] {
+  border-radius: var(--radius-lg);
+  /* In production: position: fixed; bottom: 16px; left: 50%;
+                   transform: translateX(-50%); width: min(720px, 92vw); */
+}
+.workspace-dock[data-mode="panel"] {
+  border-radius: var(--radius-lg);
+  height: 540px;
+  width: 480px;
+  /* In production: position: fixed; right: 16px; top: 64px; bottom: 16px;
+                   width: 480px; */
+}
+.workspace-dock[data-mode="focus"] {
+  border-radius: var(--radius-xl);
+  /* In production: position: fixed; inset: 32px; box-shadow: var(--shadow-xl); */
+}
+
+/* --- context badge ----------------------------------------------------- */
+.dock__context {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border-default);
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+  border-top-left-radius: inherit;
+  border-top-right-radius: inherit;
+}
+.dock__context-label {
+  color: var(--fg-subtle);
+}
+.dock__context-target {
+  color: var(--fg-default);
+  font-weight: var(--weight-medium);
+}
+.dock__context-target .type {
+  color: var(--fg-subtle);
+  font-weight: var(--weight-regular);
+  margin-left: var(--space-2);
+}
+.dock__unbind {
+  margin-left: auto;
+  background: transparent;
+  border: 0;
+  padding: 4px 8px;
+  font-family: inherit;
+  font-size: var(--text-xs);
+  color: var(--fg-subtle);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+.dock__unbind:hover { background: var(--fill-subtle); color: var(--fg-default); }
+
+/* --- body — composer fits inside ------------------------------------- */
+.dock__body {
+  padding: var(--space-3) var(--space-4) var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-height: 0;
+  flex: 1;
+}
+.workspace-dock[data-mode="panel"] .dock__body,
+.workspace-dock[data-mode="focus"] .dock__body {
+  overflow: auto;
+}
+.workspace-dock .composer {
+  /* In dock mode, no outer card — borders come from the dock shell */
+  border: 0;
+  background: transparent;
+  padding: 0;
+}
+.workspace-dock[data-mode="dock"] .composer {
+  border: 1px solid var(--border-default);
+  background: var(--bg-canvas);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+}
+
+/* --- pending stub — surfaces unconfirmed cards from earlier --------- */
+.dock__pending {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--accent-soft);
+  border-radius: var(--radius-md);
+  font-size: var(--text-xs);
+  color: var(--fg-default);
+}
+.dock__pending .count {
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--weight-medium);
+}
+.dock__pending .open {
+  margin-left: auto;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  font-size: var(--text-xs);
+  color: var(--accent-default);
+  cursor: pointer;
+}
+.dock__pending .open:hover { text-decoration: underline; }
+
+/* --- diagnostic one-liner --------------------------------------------- */
+.dock__diag {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-left: 2px solid var(--danger-fg);
+  background: var(--danger-bg);
+  font-size: var(--text-xs);
+  color: var(--fg-default);
+  line-height: var(--leading-relaxed);
+}
+.dock__diag .code {
+  font-family: var(--font-mono);
+  color: var(--danger-fg);
+}
+.dock__diag .retry {
+  margin-left: auto;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  font-size: var(--text-xs);
+  color: var(--fg-default);
+  text-decoration: underline;
+  text-decoration-color: var(--fg-subtle);
+  cursor: pointer;
+}
+
+
+/* =============================================================================
+   4. RELATION PICKER — cross-type object association selector
+   -----------------------------------------------------------------------------
+   The single official picker for binding an artifact (recording / minute /
+   briefing / quote) to one or more business objects across types.
+
+   Object types it spans: LEAD · CUSTOMER · OPPORTUNITY · INTERNAL_NONE.
+   Hosted in three placements: drawer, modal, inline (data-host attr).
+   ============================================================================= */
+
+.relation-picker {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  background: var(--bg-canvas);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  padding: var(--space-5);
+  max-width: 560px;
+}
+.relation-picker[data-host="inline"] {
+  border: 0;
+  padding: 0;
+  background: transparent;
+}
+
+/* --- head: segmented type switcher + AI toggle ------------------------ */
+.rp__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+.rp__segments {
+  display: inline-flex;
+  background: var(--bg-panel);
+  border-radius: var(--radius-md);
+  padding: 3px;
+  gap: 2px;
+}
+.rp__seg {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  padding: 5px 12px;
+  font-family: inherit;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  color: var(--fg-muted);
+  border-radius: calc(var(--radius-md) - 2px);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background var(--duration-fast) var(--ease-standard);
+}
+.rp__seg:hover { color: var(--fg-default); }
+.rp__seg.is-active {
+  background: var(--bg-canvas);
+  color: var(--fg-default);
+  box-shadow: var(--shadow-xs);
+}
+
+.rp__ai-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: auto;
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+  cursor: pointer;
+  user-select: none;
+}
+.rp__ai-toggle input { accent-color: var(--accent-default); }
+
+/* --- selected chips row ----------------------------------------------- */
+.rp__selected {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  min-height: 28px;
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--border-subtle, var(--border-default));
+}
+.rp__selected:empty::before {
+  content: "未选择关联对象";
+  color: var(--fg-faint);
+  font-size: var(--text-xs);
+  font-style: italic;
+}
+.rp__selected .tag {
+  background: var(--bg-panel);
+}
+.rp__selected .tag .type {
+  color: var(--fg-subtle);
+  margin-right: 4px;
+  font-weight: var(--weight-regular);
+}
+.rp__selected .tag button {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  margin-left: 2px;
+  font: inherit;
+  color: var(--fg-subtle);
+  cursor: pointer;
+  line-height: 1;
+}
+.rp__selected .tag button:hover { color: var(--fg-default); }
+
+/* --- search input ----------------------------------------------------- */
+.rp__search {
+  width: 100%;
+}
+
+/* --- results list — overrides item-list for AI-suggested rows -------- */
+.rp__results {
+  max-height: 280px;
+  overflow: auto;
+  border-top: 1px solid var(--border-default);
+}
+.rp__results > li {
+  cursor: pointer;
+  gap: var(--space-3);
+}
+.rp__results > li.is-suggested {
+  background: linear-gradient(
+    to right,
+    var(--accent-soft) 0,
+    var(--accent-soft) 3px,
+    transparent 3px,
+    transparent
+  );
+}
+.rp__results .prov { margin-left: auto; flex: none; }
+
+/* --- empty state ------------------------------------------------------ */
+.rp__results:empty + .rp__empty,
+.rp__empty {
+  padding: var(--space-6) var(--space-4);
+  text-align: center;
+  color: var(--fg-subtle);
+  font-size: var(--text-sm);
+}
+
+
+/* =============================================================================
+   v2.3 ADDITIONS — runtime states for the dock + .action-tile
+   -----------------------------------------------------------------------------
+   These extend the v2 anchors without changing them:
+     · .workspace-dock[data-mode="dock"].is-resting    default ambient state
+     · .workspace-dock[data-mode="dock"].is-composing  textarea focused/typing
+     · .action-tile                                    /work landing verb cards
+
+   See README v2.3 for the rules. CSS here enforces the *floor* (sizes,
+   visibility); it does not enforce the page × default-mode matrix — that's
+   the host's job.
+   ============================================================================= */
+
+
+/* --- dock runtime states ---------------------------------------------- */
+
+/* Resting (default). Compact. No starter prompts. No diagnostic unless
+   the host explicitly renders one. */
+.workspace-dock[data-mode="dock"].is-resting {
+  padding: 0;
+}
+.workspace-dock[data-mode="dock"].is-resting .dock__body {
+  padding: var(--space-2) var(--space-3);
+  gap: var(--space-2);
+}
+.workspace-dock[data-mode="dock"].is-resting .starter-prompts,
+.workspace-dock[data-mode="dock"].is-resting .attachment-row {
+  display: none;
+}
+.workspace-dock[data-mode="dock"].is-resting .composer {
+  /* In resting mode the composer is the only visible chrome — keep it tight */
+  padding: var(--space-2) var(--space-3);
+}
+
+/* Composing. Textarea focused or has content. Starter prompts may appear
+   (host decides — only when textarea is empty). Attachment row appears when
+   files are queued. */
+.workspace-dock[data-mode="dock"].is-composing .dock__body {
+  padding: var(--space-3) var(--space-4) var(--space-4);
+}
+.workspace-dock[data-mode="dock"].is-composing .composer {
+  /* Composing border picks up a hair more contrast — feels "live" without
+     advertising anything */
+  border-color: var(--border-strong);
+}
+
+/* Width — the v2.3 official answer: 720px centered floating island.
+   Pages that need a different width must override locally and document it. */
+.workspace-dock[data-mode="dock"] {
+  width: min(720px, 92vw);
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/* Forbidden chrome — kill switches. These selectors target the three
+   labels v2.3 explicitly bans, so a developer who reaches for them gets
+   nothing on screen. (The rule is "don't write the label"; this is the
+   safety net.) */
+.composer + .composer-label,
+.composer + .composer-hint,
+.workspace-dock .composer-label,
+.workspace-dock .composer-hint,
+.workspace-dock .composer-kbd-hint,
+.workspace-dock .composer-provider {
+  display: none !important;
+}
+
+
+/* =============================================================================
+   ACTION TILE — /work landing verb cards (v2.3)
+   -----------------------------------------------------------------------------
+   Small, fixed set of "verb" tiles that frame what the workspace can do.
+   Not a generic dashboard card. No icons. Max three lines of copy.
+
+   Structure:
+     <a class="action-tile" href="…">
+       <h3 class="action-tile__title">信息预查询</h3>
+       <p class="action-tile__body">…</p>
+       <p class="action-tile__meta">例如：浙江南都电源股份有限公司</p>
+     </a>
+
+   States:
+     default                   interactive
+     [aria-disabled="true"]    .is-disabled — locked / coming soon
+     :hover                    hairline strengthens, no shadow
+   ============================================================================= */
+
+.action-tile-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-4);
+}
+@media (max-width: 720px) {
+  .action-tile-grid { grid-template-columns: 1fr; }
+}
+
+.action-tile {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-5) var(--space-6);
+  background: var(--bg-canvas);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  text-decoration: none;
+  color: var(--fg-default);
+  min-height: 144px;
+  transition:
+    border-color var(--duration-fast) var(--ease-standard),
+    background   var(--duration-fast) var(--ease-standard);
+}
+.action-tile:hover {
+  border-color: var(--border-strong);
+}
+.action-tile:active {
+  background: var(--fill-subtle);
+}
+.action-tile:focus-visible {
+  outline: 2px solid var(--accent-default);
+  outline-offset: 2px;
+}
+
+.action-tile__title {
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
+  color: var(--fg-default);
+  letter-spacing: -0.005em;
+  margin: 0;
+  line-height: var(--leading-snug);
+}
+.action-tile__body {
+  font-size: var(--text-sm);
+  color: var(--fg-muted);
+  line-height: var(--leading-relaxed);
+  text-wrap: pretty;
+  margin: 0;
+  /* Body never exceeds two lines — if it does, the copy is too long */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.action-tile__meta {
+  margin-top: auto;
+  padding-top: var(--space-3);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--fg-subtle);
+  letter-spacing: 0;
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Disabled — coming soon / locked behind config */
+.action-tile[aria-disabled="true"],
+.action-tile.is-disabled {
+  pointer-events: none;
+  background: var(--bg-canvas);
+}
+.action-tile[aria-disabled="true"] .action-tile__title,
+.action-tile.is-disabled .action-tile__title,
+.action-tile[aria-disabled="true"] .action-tile__body,
+.action-tile.is-disabled .action-tile__body,
+.action-tile[aria-disabled="true"] .action-tile__meta,
+.action-tile.is-disabled .action-tile__meta {
+  color: var(--fg-faint);
+}
+
+/* Icon density floor — action tiles never get icons inside, even if a
+   developer is tempted. The rule says "no icon"; the CSS enforces it. */
+.action-tile :is(svg, .icon, [class*="lucide-"]) {
+  display: none !important;
+}
