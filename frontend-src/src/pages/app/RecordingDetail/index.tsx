@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { fetchRecording, processRecording } from "@/api/endpoints";
+import { fetchRecording, processRecording, generateEmotion } from "@/api/endpoints";
 import { readApiError } from "@/api/client";
 import { Button } from "@/components/Button";
 import { Diag } from "@/components/Diag";
@@ -14,7 +14,7 @@ import { formatRelative } from "@/utils/format";
 import { RecordingCard } from "./RecordingCard";
 import { SpeakersCard } from "./SpeakersCard";
 import { Timeline } from "./Timeline";
-import { Preview, TRANSCRIPT_KEY, summaryArtifactKey, type ArtifactKey } from "./Preview";
+import { Preview, TRANSCRIPT_KEY, EMOTION_KEY, summaryArtifactKey, type ArtifactKey } from "./Preview";
 import { ReviseComposer } from "./ReviseComposer";
 import { Drawer } from "./Drawer";
 import { SpeakersPanel } from "./SpeakersPanel";
@@ -66,16 +66,28 @@ export function RecordingDetail() {
       const data = q.state.data;
       if (!data) return 6000;
       const rec = data.recording;
+      const taskActive = (data.tasks ?? []).some(
+        (t) => t.status === "running" || t.status === "queued",
+      );
       const active =
         rec.asr_status === "running" ||
         rec.summary_status === "running" ||
-        rec.crm_sync_status === "syncing";
+        rec.crm_sync_status === "syncing" ||
+        taskActive;
       return active ? 4000 : false;
     },
   });
 
   const reprocess = useMutation({
     mutationFn: () => processRecording(recordingId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["recording", recordingId] });
+      qc.invalidateQueries({ queryKey: ["tasks"] });
+    },
+  });
+
+  const emotionMut = useMutation({
+    mutationFn: () => generateEmotion(recordingId),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["recording", recordingId] });
       qc.invalidateQueries({ queryKey: ["tasks"] });
@@ -122,7 +134,10 @@ export function RecordingDetail() {
   }
   if (!detail.data) return <EmptyState description="没有这条录音。" />;
 
-  const { recording: rec, segments, tasks, hotword_package: pkg, crm_sync } = detail.data;
+  const { recording: rec, segments, tasks, hotword_package: pkg, crm_sync, emotion_analysis: emotionAnalysis } = detail.data;
+  const emotionRunning = tasks.some(
+    (t) => t.step.includes("情绪") && (t.status === "running" || t.status === "queued"),
+  );
   const tone = overallTone(rec.asr_status, rec.summary_status);
   const label = overallLabel(rec.asr_status, rec.summary_status);
   const uniqueSpeakers = new Set(segments.map((s) => s.speaker)).size;
@@ -200,8 +215,12 @@ export function RecordingDetail() {
             summaries={summaries}
             segments={segments}
             crmSync={crm_sync}
+            emotion={emotionAnalysis}
             onPreviewSummary={(summaryId) => setPreviewKey(`summary:${summaryId}`)}
             onPreviewTranscript={() => setPreviewKey(TRANSCRIPT_KEY)}
+            onPreviewEmotion={() => setPreviewKey(EMOTION_KEY)}
+            onGenerateEmotion={() => emotionMut.mutate()}
+            emotionPending={emotionMut.isPending || emotionRunning}
             onOpenCrm={() => setDrawer("crm")}
             activePreviewKey={previewKey}
           />
@@ -224,6 +243,7 @@ export function RecordingDetail() {
             recordingId={recordingId}
             summaries={summaries}
             segments={segments}
+            emotion={emotionAnalysis}
             selected={previewKey}
             onSelect={setPreviewKey}
             onClose={() => setPreviewKey(null)}

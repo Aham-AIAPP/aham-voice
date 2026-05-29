@@ -1,7 +1,8 @@
 import { useMemo } from "react";
 import { cn } from "@/utils/cn";
 import { formatRelative } from "@/utils/format";
-import type { Recording, RecordingTask, Summary, CrmSync, TranscriptSegment } from "@/api/types";
+import type { Recording, RecordingTask, Summary, CrmSync, TranscriptSegment, EmotionAnalysis } from "@/api/types";
+import { EMOTION_KEY } from "./Preview";
 
 type Tone = "moss" | "accent" | "rust" | "amber" | "muted";
 
@@ -28,6 +29,8 @@ interface TimelineEvent {
     state: "running" | "done" | "failed";
   };
   onClick?: () => void;
+  actionLabel?: string;
+  actionDisabled?: boolean;
 }
 
 interface Props {
@@ -36,8 +39,12 @@ interface Props {
   summaries: Summary[];
   segments: TranscriptSegment[];
   crmSync: CrmSync;
+  emotion: EmotionAnalysis | null;
   onPreviewSummary: (summaryId: string) => void;
   onPreviewTranscript: () => void;
+  onPreviewEmotion: () => void;
+  onGenerateEmotion: () => void;
+  emotionPending: boolean;
   onOpenCrm: () => void;
 }
 
@@ -76,7 +83,7 @@ function isTranscribeStep(step: string): boolean {
 }
 
 function buildEvents(props: Props): TimelineEvent[] {
-  const { recording: rec, tasks, summaries, segments, crmSync, onPreviewSummary, onPreviewTranscript, onOpenCrm } = props;
+  const { recording: rec, tasks, summaries, segments, crmSync, emotion, onPreviewSummary, onPreviewTranscript, onPreviewEmotion, onGenerateEmotion, emotionPending, onOpenCrm } = props;
   const events: TimelineEvent[] = [];
 
   events.push({
@@ -163,6 +170,35 @@ function buildEvents(props: Props): TimelineEvent[] {
     });
   }
 
+  // 对话情绪分析：已生成 → 文档卡；未生成且转写完成 → 按需生成入口。
+  if (emotion) {
+    events.push({
+      id: `emotion:${emotion.id}`,
+      at: emotion.created_at,
+      title: "对话情绪分析",
+      tone: "moss",
+      artifact: {
+        type: "MD",
+        filename: "对话情绪分析",
+        meta: emotion.model,
+      },
+      onClick: onPreviewEmotion,
+    });
+  } else if (rec.asr_status === "done") {
+    events.push({
+      id: "emotion:gen",
+      at: rec.updated_at,
+      title: "对话情绪分析",
+      detail: emotionPending
+        ? "正在分析说话情绪、客户意向与异议…"
+        : "识别说话情绪、客户意向与异议（独立于纪要，可单独下载）",
+      tone: emotionPending ? "accent" : "muted",
+      onClick: onGenerateEmotion,
+      actionLabel: emotionPending ? "分析中…" : "生成对话情绪分析",
+      actionDisabled: emotionPending,
+    });
+  }
+
   if (crmSync.synced_at || crmSync.status === "failed") {
     const targetText = crmSync.relation_target_name
       ? `关联 ${crmSync.relation_target_name}`
@@ -189,7 +225,8 @@ function buildEvents(props: Props): TimelineEvent[] {
     task: 2,
     transcript: 3,
     summary: 4,
-    crm: 5,
+    emotion: 5,
+    crm: 6,
   };
   events.sort((a, b) => {
     const t = a.at.localeCompare(b.at);
@@ -201,6 +238,26 @@ function buildEvents(props: Props): TimelineEvent[] {
   return events;
 }
 
+function overallProgress(rec: Recording, tasks: RecordingTask[]): number {
+  const asrDone = rec.asr_status === "done";
+  const sumDone = rec.summary_status === "done";
+  if (asrDone && sumDone) return 100;
+  const runningProgress = (re: RegExp): number => {
+    const t = [...tasks].reverse().find((x) => re.test(x.step) && (x.status === "running" || x.status === "queued"));
+    return t ? Math.max(0, Math.min(100, t.progress)) : 0;
+  };
+  // 转写占整体 70%、纪要占 30%；瞬时的「新增录音/音频分析」不计入，开局接近 0。
+  let asrPct = 0;
+  if (asrDone) asrPct = 100;
+  else if (rec.asr_status === "running") asrPct = runningProgress(/VAD|转写/) || 5;
+  else if (rec.asr_status === "queued") asrPct = 2;
+  else if (rec.asr_status === "failed") asrPct = runningProgress(/VAD|转写/);
+  let sumPct = 0;
+  if (sumDone) sumPct = 100;
+  else if (rec.summary_status === "running") sumPct = runningProgress(/纪要/) || 5;
+  return Math.max(0, Math.min(99, Math.round(asrPct * 0.7 + sumPct * 0.3)));
+}
+
 interface TimelineProps extends Props {
   /** Key of the artifact currently visible in the rail; we highlight the
    *  matching doc card on the timeline. */
@@ -209,11 +266,11 @@ interface TimelineProps extends Props {
 
 export function Timeline(props: TimelineProps) {
   const events = useMemo(() => buildEvents(props), [props]);
-  const done = events.filter((e) => e.tone === "moss").length;
-  const total = events.length;
-  const donePct = total > 0 ? Math.round((done / total) * 100) : 0;
-  const currentEvent = events.find((e) => e.tone !== "moss");
-  const currentLabel = currentEvent ? currentEvent.title : "已完成";
+  const donePct = overallProgress(props.recording, props.tasks);
+  const stagesDone =
+    (props.recording.asr_status === "done" ? 1 : 0) + (props.recording.summary_status === "done" ? 1 : 0);
+  const currentEvent = events.find((e) => e.tone === "accent" || e.tone === "amber" || e.tone === "rust");
+  const currentLabel = donePct >= 100 ? "已完成" : currentEvent ? currentEvent.title : "处理中";
 
   return (
     <section className="card" style={{ display: "flex", flexDirection: "column", gap: "var(--space-3)" }}>
@@ -222,7 +279,7 @@ export function Timeline(props: TimelineProps) {
           录音处理时间线
         </h3>
         <span className="meta" style={{ fontSize: "var(--text-xs)", color: "var(--fg-subtle)" }}>
-          {done}/{total} 已完成
+          {stagesDone}/2 阶段 · {donePct}%
         </span>
       </header>
 
@@ -244,7 +301,8 @@ export function Timeline(props: TimelineProps) {
         {events.map((event) => {
           const isActive = !!event.artifact && !!props.activePreviewKey && (
             (event.id.startsWith("summary:") && event.id === `summary:${props.activePreviewKey.split(":")[1]}`) ||
-            (event.id === "transcript:ready" && props.activePreviewKey === "transcript")
+            (event.id === "transcript:ready" && props.activePreviewKey === "transcript") ||
+            (event.id.startsWith("emotion:") && props.activePreviewKey === EMOTION_KEY)
           );
           return (
             <li
@@ -300,7 +358,8 @@ export function Timeline(props: TimelineProps) {
                 {!event.artifact && event.onClick && (
                   <button
                     type="button"
-                    onClick={event.onClick}
+                    disabled={event.actionDisabled}
+                    onClick={event.actionDisabled ? undefined : event.onClick}
                     style={{
                       appearance: "none",
                       background: "transparent",
@@ -311,10 +370,11 @@ export function Timeline(props: TimelineProps) {
                       font: "inherit",
                       fontSize: "var(--text-xs)",
                       color: "var(--fg-default)",
-                      cursor: "pointer",
+                      cursor: event.actionDisabled ? "default" : "pointer",
+                      opacity: event.actionDisabled ? 0.6 : 1,
                     }}
                   >
-                    打开 →
+                    {event.actionLabel ?? "打开 →"}
                   </button>
                 )}
               </div>

@@ -42,7 +42,8 @@ function overallStatus(rec: Recording): { tone: React.ComponentProps<typeof Stat
 
 export function RecordingsList() {
   const { user } = useAuth();
-  const [scope, setScope] = useState<"mine" | "team">("mine");
+  const isOrgWide = user?.role === "manager" && (user?.managed_team_ids ?? []).includes("*");
+  const [scope, setScope] = useState<"mine" | "team">(isOrgWide ? "team" : "mine");
   const [meetingType, setMeetingType] = useState<string>("全部");
   const [q, setQ] = useState("");
 
@@ -90,7 +91,7 @@ export function RecordingsList() {
               我的
             </button>
             <button role="tab" aria-selected={scope === "team"} onClick={() => setScope("team")}>
-              团队
+              {isOrgWide ? "全部" : "团队"}
             </button>
           </div>
         )}

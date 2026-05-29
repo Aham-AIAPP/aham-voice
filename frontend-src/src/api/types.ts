@@ -350,15 +350,27 @@ export interface CrmSync {
   candidates: unknown[];
 }
 
+export interface EmotionAnalysis {
+  id: string;
+  recording_id: string;
+  content: string;
+  model: string;
+  acoustic_json: string | null;
+  created_at: string;
+  version: number;
+  is_current: number;
+}
+
 export interface RecordingDetail {
   recording: Recording;
   segments: TranscriptSegment[];
   summary: Summary | null;
   summaries: Summary[];
+  emotion_analysis: EmotionAnalysis | null;
   tasks: RecordingTask[];
   outputs: Array<{
     id: string;
-    kind: "transcript" | "summary";
+    kind: "transcript" | "summary" | "emotion";
     title: string;
     format: string;
     status: string;

@@ -35,6 +35,7 @@ from _hotword_sync_lib import (
     common_argparser,
     count_for_source,
     db_conn,
+    derive_short_names_llm,
     emit_json,
     gather_local_corpus,
     load_env,
@@ -110,6 +111,25 @@ def fetch_newcrm_corpus(base: str, token: str, timeout: float = 60.0) -> dict[st
 def extract_from_newcrm(corpus: dict[str, Any], max_terms: int) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any], str]:
     rule_terms = build_rule_terms(corpus)
     log(f"规则提取候选词 {len(rule_terms)} 个")
+    # 公司全称 → DeepSeek 口语简称（收规则兜不住的长尾：德能电机→德能、新斯达传动→新斯达）
+    company_names: set[str] = set()
+    for c in corpus.get("customers", []) or []:
+        if isinstance(c, dict) and c.get("name"):
+            company_names.add(str(c["name"]).strip())
+    for o in corpus.get("opportunities", []) or []:
+        if isinstance(o, dict) and o.get("customerName"):
+            company_names.add(str(o["customerName"]).strip())
+    for e in corpus.get("enterprises", []) or []:
+        if isinstance(e, dict) and e.get("name"):
+            company_names.add(str(e["name"]).strip())
+    short_map = derive_short_names_llm(sorted(company_names))
+    llm_short_terms = [
+        {"word": s, "kind": "客户简称", "aliases": [], "confidence": 0.9, "frequency": 1}
+        for shorts in short_map.values()
+        for s in shorts
+    ]
+    log(f"DeepSeek 简称 {len(llm_short_terms)} 个（覆盖 {len(short_map)} 家公司）")
+    rule_terms = merge_candidate_lists(rule_terms, llm_short_terms)
     free_text = build_free_text_corpus(corpus)
     log(f"自由文本 {len(free_text)} 字")
     llm_terms: list[dict[str, Any]] = []

@@ -22,6 +22,7 @@ export function RecordingNew() {
   const [tag, setTag] = useState("");
   const [autoProcess, setAutoProcess] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [uploadPct, setUploadPct] = useState<number | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
@@ -31,7 +32,10 @@ export function RecordingNew() {
       qc.invalidateQueries({ queryKey: ["recordings"] });
       navigate(`/app/recordings/${rec.id}`, { replace: true });
     },
-    onError: (err) => setError(readApiError(err)),
+    onError: (err) => {
+      setError(readApiError(err));
+      setUploadPct(null);
+    },
   });
 
   function onFile(f: File | null) {
@@ -65,12 +69,14 @@ export function RecordingNew() {
       setError("给录音起一个标题。");
       return;
     }
+    setUploadPct(0);
     mutation.mutate({
       file,
       title: title.trim(),
       meeting_type: meetingType,
       tag: tag.trim(),
       auto_process: autoProcess,
+      onProgress: (p) => setUploadPct(p),
     });
   }
 
@@ -164,8 +170,20 @@ export function RecordingNew() {
 
         {error && <Diag code="REC_E_UPLOAD">{error}</Diag>}
 
+        {mutation.isPending && uploadPct !== null && (
+          <div className="card" style={{ display: "flex", flexDirection: "column", gap: "var(--space-2)" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: "var(--text-sm)" }}>
+              <span>{uploadPct < 100 ? "正在上传…" : "上传完成，正在准备处理…"}</span>
+              <span className="meta">{uploadPct}%</span>
+            </div>
+            <div className="task__bar">
+              <div className="task__fill" style={{ width: `${uploadPct}%` }} />
+            </div>
+          </div>
+        )}
+
         <div style={{ display: "flex", gap: "var(--space-3)", justifyContent: "flex-end" }}>
-          <Button variant="ghost" onClick={() => navigate(-1)} type="button">
+          <Button variant="ghost" onClick={() => navigate(-1)} type="button" disabled={mutation.isPending}>
             取消
           </Button>
           <Button
@@ -174,7 +192,11 @@ export function RecordingNew() {
             loading={mutation.isPending}
             disabled={!file || !title.trim()}
           >
-            上传并开始
+            {mutation.isPending
+              ? uploadPct !== null && uploadPct < 100
+                ? `上传中 ${uploadPct}%`
+                : "处理中…"
+              : "上传并开始"}
           </Button>
         </div>
       </form>

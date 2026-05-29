@@ -5,6 +5,7 @@ import {
   fetchSpeakerCandidates,
   fetchVoiceprints,
   renameSpeaker,
+  segmentAudioUrl,
 } from "@/api/endpoints";
 import { Button } from "@/components/Button";
 import { EmptyState } from "@/components/EmptyState";
@@ -163,6 +164,23 @@ export function SpeakersPanel({ recordingId, asrStatus, initialSpeaker }: Props)
 
             {editing === candidate.speaker && (
               <div style={{ marginTop: "var(--space-4)", display: "flex", flexDirection: "column", gap: "var(--space-4)", maxWidth: 560 }}>
+                {candidate.sample_segments.length > 0 && (
+                  <div>
+                    <p className="meta" style={{ fontSize: "var(--text-xs)", marginBottom: "var(--space-2)" }}>
+                      试听代表片段，听出是谁再命名：
+                    </p>
+                    <ul style={{ display: "flex", flexDirection: "column", gap: "var(--space-2)" }}>
+                      {candidate.sample_segments.slice(0, 3).map((seg) => (
+                        <li key={seg.id} style={{ display: "flex", gap: "var(--space-3)", alignItems: "center" }}>
+                          <audio controls preload="none" src={segmentAudioUrl(recordingId, seg.id)} style={{ height: 32, flexShrink: 0 }} />
+                          <span className="meta" style={{ fontSize: "var(--text-2xs)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {seg.start_label} · {seg.text}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
                 <FormRow label="姓名" required>
                   <Field value={name} onChange={(e) => setName(e.target.value)} placeholder="如：王晓东" />
                 </FormRow>
@@ -205,7 +223,7 @@ export function SpeakersPanel({ recordingId, asrStatus, initialSpeaker }: Props)
                               {seg.start_label} · {seg.duration_label} · <QualityChip quality={seg.quality} />
                             </p>
                           </div>
-                          <audio controls src={seg.audio_url} style={{ height: 24 }} />
+                          <audio controls preload="none" src={segmentAudioUrl(recordingId, seg.id)} style={{ height: 24 }} />
                         </li>
                       ))}
                     </ul>

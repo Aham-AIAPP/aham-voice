@@ -1,4 +1,4 @@
-import { api } from "./client";
+import { api, getStoredToken } from "./client";
 import type {
   AdminOverview,
   AuditRow,
@@ -69,6 +69,7 @@ export async function uploadRecording(input: {
   meeting_type?: string;
   tag?: string;
   auto_process?: boolean;
+  onProgress?: (pct: number) => void;
 }): Promise<Recording> {
   const form = new FormData();
   form.append("file", input.file);
@@ -76,7 +77,13 @@ export async function uploadRecording(input: {
   if (input.meeting_type) form.append("meeting_type", input.meeting_type);
   if (input.tag) form.append("tag", input.tag);
   form.append("auto_process", String(input.auto_process ?? true));
-  const { data } = await api.post<Recording>("/recordings", form);
+  const { data } = await api.post<Recording>("/recordings", form, {
+    onUploadProgress: (e) => {
+      if (input.onProgress && e.total) {
+        input.onProgress(Math.round((e.loaded / e.total) * 100));
+      }
+    },
+  });
   return data;
 }
 
@@ -97,6 +104,11 @@ export async function summarizeRecording(id: string): Promise<{ recording_id: st
 
 export async function reviseSummary(id: string, instruction: string): Promise<{ recording_id: string; model: string; summary_id: string; version: number }> {
   const { data } = await api.post(`/recordings/${id}/summary/revise`, { instruction });
+  return data;
+}
+
+export async function generateEmotion(id: string): Promise<{ status: string; recording_id: string }> {
+  const { data } = await api.post(`/recordings/${id}/emotion`);
   return data;
 }
 
@@ -307,20 +319,33 @@ function apiPrefix(): string {
   return "/api";
 }
 
+// Append the session token as a query param. Media/download URLs are loaded
+// directly by the browser (<audio src>, <a download>), which can't attach the
+// Authorization header — so the backend also accepts ?token=.
+function withToken(url: string): string {
+  const token = getStoredToken();
+  if (!token) return url;
+  return `${url}${url.includes("?") ? "&" : "?"}token=${encodeURIComponent(token)}`;
+}
+
 export function recordingAudioUrl(id: string): string {
-  return `${apiPrefix()}/recordings/${id}/audio`;
+  return withToken(`${apiPrefix()}/recordings/${id}/audio`);
 }
 
 export function exportTranscriptUrl(id: string): string {
-  return `${apiPrefix()}/recordings/${id}/export/transcript.md`;
+  return withToken(`${apiPrefix()}/recordings/${id}/export/transcript.md`);
 }
 
 export function exportSummaryUrl(id: string): string {
-  return `${apiPrefix()}/recordings/${id}/export/summary.md`;
+  return withToken(`${apiPrefix()}/recordings/${id}/export/summary.md`);
 }
 
 export function exportSummaryVersionUrl(id: string, summaryId: string): string {
-  return `${apiPrefix()}/recordings/${id}/export/summaries/${summaryId}.md`;
+  return withToken(`${apiPrefix()}/recordings/${id}/export/summaries/${summaryId}.md`);
+}
+
+export function exportEmotionUrl(id: string): string {
+  return withToken(`${apiPrefix()}/recordings/${id}/export/emotion.md`);
 }
 
 export function auditCsvUrl(params: { category?: string; q?: string; from?: string; to?: string }): string {
@@ -330,9 +355,9 @@ export function auditCsvUrl(params: { category?: string; q?: string; from?: stri
   if (params.from) search.set("from", params.from);
   if (params.to) search.set("to", params.to);
   const qs = search.toString();
-  return `${apiPrefix()}/audit.csv${qs ? `?${qs}` : ""}`;
+  return withToken(`${apiPrefix()}/audit.csv${qs ? `?${qs}` : ""}`);
 }
 
 export function segmentAudioUrl(recordingId: string, segmentId: string): string {
-  return `${apiPrefix()}/recordings/${recordingId}/segments/${segmentId}/audio`;
+  return withToken(`${apiPrefix()}/recordings/${recordingId}/segments/${segmentId}/audio`);
 }

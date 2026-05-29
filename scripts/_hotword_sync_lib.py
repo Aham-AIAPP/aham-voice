@@ -112,6 +112,153 @@ def valid_term(text: str) -> bool:
     return True
 
 
+_PROVINCES = (
+    "北京|上海|天津|重庆|河北|山西|辽宁|吉林|黑龙江|江苏|浙江|安徽|福建|江西|山东|河南|湖北|湖南|"
+    "广东|海南|四川|贵州|云南|陕西|甘肃|青海|台湾|内蒙古|广西|西藏|宁夏|新疆|香港|澳门"
+)
+_CITIES = (
+    "扬州|苏州|无锡|常州|南京|杭州|宁波|温州|绍兴|嘉兴|金华|台州|徐州|南通|盐城|泰州|镇江|淮安|连云港|宿迁|湖州|丽水|"
+    "深圳|广州|东莞|佛山|珠海|中山|惠州|江门|肇庆|汕头|湛江|茂名|成都|绵阳|德阳|宜宾|南充|武汉|宜昌|襄阳|荆州|"
+    "西安|宝鸡|咸阳|青岛|济南|烟台|潍坊|淄博|临沂|济宁|东营|威海|聊城|德州|滨州|菏泽|泰安|大连|沈阳|鞍山|长春|吉林|"
+    "哈尔滨|大庆|郑州|洛阳|开封|新乡|南阳|许昌|信阳|焦作|平顶山|商丘|长沙|株洲|湘潭|衡阳|岳阳|常德|合肥|芜湖|蚌埠|"
+    "马鞍山|福州|厦门|泉州|漳州|莆田|龙岩|三明|宁德|南昌|九江|上饶|赣州|昆明|大理|玉溪|贵阳|遵义|南宁|柳州|桂林|"
+    "石家庄|唐山|保定|廊坊|沧州|邯郸|太原|银川|包头|呼和浩特|鄂尔多斯|兰州|西宁|乌鲁木齐"
+)
+_REGION_PREFIX = re.compile(
+    rf"^(?:{_PROVINCES}|{_CITIES})(?:省|市|自治区|特别行政区|地区|自治州|盟)?"
+)
+# 通用兜底：开头 2-4 个汉字后接 省/市/区/自治州 这种行政区划尾巴
+_REGION_SUFFIX_TOKEN = re.compile(r"^[一-鿿]{2,4}?(?:省|市|区|县|自治区|自治州|特别行政区)")
+_LEGAL_SUFFIX = re.compile(
+    r"(?:\([^)]*\)|（[^）]*）)?"
+    r"(?:集团)?(?:股份)?(?:有限)?(?:责任)?公司$"
+    r"|(?:集团|总公司|分公司|子公司|公司|厂|店|中心|研究院|研究所|设计院|事业部|工作室|合作社|事务所|门市部)$"
+)
+# 行业/经营特点词：在字号之后，出现即认为字号到此为止
+_INDUSTRY = (
+    "科技|网络|信息|技术|数据|软件|智能|数字|系统|通信|光电|半导体|电子|数码|自动化|"
+    "电机|电气|机电|机械|传动|设备|装备|仪器|仪表|重工|精密|制造|工业|工程|建筑|建设|安装|"
+    "材料|新材料|化工|化学|涂料|塑料|橡胶|金属|钢铁|冶金|有色|食品|饮料|农业|生物|医药|药业|"
+    "医疗|器械|健康|能源|新能源|电力|环保|节能|物流|供应链|贸易|实业|商贸|进出口|国际|控股|"
+    "投资|资本|金融|担保|租赁|咨询|顾问|服务|管理|文化|传媒|教育|地产|置业|物业|纺织|服装|"
+    "家居|家具|包装|印刷|汽车|配件|电器|照明|阀门|泵业|轴承|模具|五金|工具|测控|检测|认证"
+)
+_INDUSTRY_CUT = re.compile(rf"(?:{_INDUSTRY})")
+
+
+def derive_short_names(name: str) -> list[str]:
+    """企业全称 → 口语口头简称（字号）。中文公司名结构是 [地区][字号][行业][组织形式]，
+    人们开口只说字号（德能、新斯达），全称太长 ASR 反而匹配不上，所以要把字号抽出来当热词。
+    策略：剥地区前缀 → 剥组织形式后缀 → 切到第一个行业词取前面字号；行业词没命中则取前 2-4 字兜底。"""
+    full = (name or "").strip()
+    if not full:
+        return []
+    out: list[str] = []
+
+    def push(s: str) -> None:
+        s = (s or "").strip()
+        if 2 <= len(s) <= 8 and s != full and s not in out:
+            out.append(s)
+
+    # 1) 剥地区前缀
+    core = _REGION_PREFIX.sub("", full, count=1).strip()
+    if core == full:
+        m = _REGION_SUFFIX_TOKEN.match(full)
+        if m:
+            core = full[m.end():].strip()
+    core = core or full
+    # 2) 剥组织形式后缀
+    base = _LEGAL_SUFFIX.sub("", core).strip() or core
+    # 3) 切到第一个行业词 → 前面是字号
+    cut = _INDUSTRY_CUT.search(base)
+    if cut and cut.start() >= 2:
+        push(base[: cut.start()])
+    else:
+        # 4) 行业词没命中 → 取前 3/2/4 字当字号候选（中文字号几乎都在最前）
+        for n in (3, 2, 4):
+            if len(base) > n:
+                push(base[:n])
+    # 中间形态（剥完地区+组织形式，如「维嘉投资」「新斯达传动科技」）也保留一个
+    push(base)
+    return out
+
+
+def _parse_json_object(content: str) -> dict[str, Any]:
+    raw = (content or "").strip()
+    if raw.startswith("```"):
+        raw = re.sub(r"^```(?:json)?\s*", "", raw)
+        raw = re.sub(r"\s*```$", "", raw)
+    try:
+        data = json.loads(raw)
+        return data if isinstance(data, dict) else {}
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", raw, re.DOTALL)
+        if not match:
+            return {}
+        try:
+            data = json.loads(match.group(0))
+            return data if isinstance(data, dict) else {}
+        except json.JSONDecodeError:
+            return {}
+
+
+def derive_short_names_llm(names: list[str], *, max_batch: int = 100) -> dict[str, list[str]]:
+    """规则兜不住的长尾交给 DeepSeek：给公司全称列表，产出口语简称（字号）。
+    返回 {全称: [简称…]}。无 key / 无名称时返回 {}，不抛错。"""
+    api_key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
+    base = os.environ.get("DEEPSEEK_API_BASE", "https://api.deepseek.com").rstrip("/")
+    model = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
+    uniq = list(dict.fromkeys(n.strip() for n in (names or []) if n and n.strip()))
+    if not api_key or not uniq:
+        return {}
+    out: dict[str, list[str]] = {}
+    with httpx.Client(timeout=120) as client:
+        for i in range(0, len(uniq), max_batch):
+            batch = uniq[i:i + max_batch]
+            log(f"DeepSeek 简称抽取 {i + 1}-{i + len(batch)}/{len(uniq)}")
+            payload = {
+                "model": model,
+                "temperature": 0.1,
+                "max_tokens": 4096,
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": (
+                            "你是中文企业名称分析助手。给定公司全称，输出人们在口语里通常的简称（字号/俗称）。"
+                            "只要能在口语里替代全称的简短叫法，优先 2-4 字；去掉地区、行业、组织形式（有限公司/集团等）。"
+                            "只输出 JSON 对象，不要解释、不要 markdown 代码块。某个公司没有合适简称就给空数组。"
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": (
+                            '给下面每个公司全称输出口语简称，JSON 形如 {"全称":["简称1","简称2"]}：\n'
+                            + "\n".join(batch)
+                        ),
+                    },
+                ],
+            }
+            try:
+                res = client.post(
+                    f"{base}/chat/completions",
+                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                    json=payload,
+                )
+                if res.status_code >= 400:
+                    raise RuntimeError(f"DeepSeek HTTP {res.status_code}: {res.text[:200]}")
+                content = res.json()["choices"][0]["message"]["content"]
+            except Exception as exc:
+                log(f"  简称批次失败：{exc}")
+                continue
+            for full, shorts in _parse_json_object(content).items():
+                if not isinstance(shorts, list):
+                    continue
+                clean = [str(s).strip() for s in shorts if isinstance(s, (str, int)) and valid_term(str(s))]
+                if clean:
+                    out[str(full).strip()] = clean[:4]
+    return out
+
+
 def chunk_text(text: str, size: int = 24000, max_chunks: int = 6) -> list[str]:
     if not text:
         return []
@@ -471,10 +618,22 @@ def build_rule_terms(corpus: dict[str, Any]) -> list[dict[str, Any]]:
             "frequency": 1,
         })
 
+    def add_company(name: Any, kind: str, *, extra_aliases: list[str] | None = None) -> None:
+        """Add a company/customer name AND its derived spoken short forms, so the
+        ASR can match "维嘉" not just "维嘉投资有限公司"."""
+        if name is None:
+            return
+        text = str(name).strip()
+        shorts = derive_short_names(text)
+        aliases = list(shorts) + [a for a in (extra_aliases or []) if a]
+        add(text, kind, aliases=aliases)
+        for short in shorts:
+            add(short, "客户简称", confidence=0.9)
+
     for c in corpus.get("customers", []) or []:
         if not isinstance(c, dict):
             continue
-        add(c.get("name"), "客户", aliases=[c.get("shortName")] if c.get("shortName") else [])
+        add_company(c.get("name"), "客户", extra_aliases=[c.get("shortName")])
         add(c.get("shortName"), "客户简称")
         add(c.get("sellerName"), "人员", confidence=0.85)
         add(c.get("industry"), "行业", confidence=0.7)
@@ -483,14 +642,14 @@ def build_rule_terms(corpus: dict[str, Any]) -> list[dict[str, Any]]:
         if not isinstance(o, dict):
             continue
         add(o.get("name"), "商机")
-        add(o.get("customerName"), "客户")
+        add_company(o.get("customerName"), "客户")
         add(o.get("responsibleName"), "人员", confidence=0.85)
         add(o.get("industry"), "行业", confidence=0.7)
 
     for e in corpus.get("enterprises", []) or []:
         if not isinstance(e, dict):
             continue
-        add(e.get("name"), "潜在客户")
+        add_company(e.get("name"), "潜在客户")
         add(e.get("saleRep"), "人员", confidence=0.85)
         add(e.get("industry"), "行业", confidence=0.7)
 
@@ -498,12 +657,12 @@ def build_rule_terms(corpus: dict[str, Any]) -> list[dict[str, Any]]:
         if not isinstance(t, dict):
             continue
         add(t.get("ownerName"), "人员", confidence=0.85)
-        add(t.get("customerName"), "客户")
+        add_company(t.get("customerName"), "客户")
 
     for v in corpus.get("visits", []) or []:
         if not isinstance(v, dict):
             continue
-        add(v.get("customerName"), "客户")
+        add_company(v.get("customerName"), "客户")
         add(v.get("personName"), "人员", confidence=0.85)
 
     return list(candidates.values())

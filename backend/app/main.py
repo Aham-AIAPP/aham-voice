@@ -64,6 +64,7 @@ VAD = MODELS / "speech_fsmn_vad_zh-cn-16k-common-pytorch"
 PUNC = MODELS / "punc_ct-transformer_cn-en-common-vocab471067-large"
 PARAFORMER = MODELS / "speech_seaco_paraformer_large_asr_nat-zh-cn-16k-common-vocab8404-pytorch"
 CAMPLUS = MODELS / "speech_campplus_sv_zh-cn_16k-common"
+EMOTION = MODELS / "emotion2vec_plus_large"
 VOICEPRINTS = BASE / "voiceprints"
 FFMPEG = BASE / "bin" / "ffmpeg"
 FFPROBE = BASE / "bin" / "ffprobe"
@@ -89,6 +90,7 @@ app.add_middleware(
 
 _asr_model: Any | None = None
 _speaker_verifier: Any | None = None
+_emotion_model: Any | None = None
 # FunASR's AutoModel and the modelscope speaker_verification pipeline both keep
 # internal state across calls (cache dicts, tensor buffers, optional CUDA
 # context). Concurrent invocations from starlette's threadpool — one upload
@@ -97,6 +99,7 @@ _speaker_verifier: Any | None = None
 _asr_lock = threading.Lock()
 _asr_init_lock = threading.Lock()
 _verifier_init_lock = threading.Lock()
+_emotion_init_lock = threading.Lock()
 DEFAULT_VOICEPRINT_THRESHOLD = 0.66
 
 
@@ -322,6 +325,16 @@ def ensure_schema() -> None:
                 content text not null,
                 model text not null,
                 created_at text not null
+            );
+            create table if not exists emotion_analyses (
+                id text primary key,
+                recording_id text not null,
+                content text not null,
+                model text not null,
+                acoustic_json text,
+                created_at text not null,
+                version integer not null default 1,
+                is_current integer not null default 1
             );
             create table if not exists tasks (
                 id text primary key,
@@ -945,8 +958,14 @@ def create_session(conn: sqlite3.Connection, user_id: str) -> str:
     return token
 
 
-def current_user(authorization: str | None = Header(default=None)) -> dict[str, Any]:
-    token = (authorization or "").removeprefix("Bearer").strip()
+def current_user(
+    authorization: str | None = Header(default=None),
+    token_query: str | None = Query(default=None, alias="token"),
+) -> dict[str, Any]:
+    # Header Bearer is the normal path. The ?token= query fallback exists for
+    # media/download URLs (<audio src>, <a download>) where the browser can't
+    # attach an Authorization header.
+    token = (authorization or "").removeprefix("Bearer").strip() or (token_query or "").strip()
     if not token:
         raise HTTPException(status_code=401, detail="missing session token")
     with db() as conn:
@@ -974,6 +993,9 @@ def recording_where(user: dict[str, Any], scope: str = "mine") -> tuple[str, lis
         return "1=0", []
     if user["role"] == "manager" and scope == "team":
         team_ids = managed_team_ids(user)
+        if "*" in team_ids:
+            # 业务管理员：用普通用户界面，但看全量数据（不限团队）。
+            return "1=1", []
         placeholders = ",".join("?" for _ in team_ids) or "?"
         return f"recordings.team_id in ({placeholders})", team_ids or ["__none__"]
     return "recordings.owner_id = ?", [user["id"]]
@@ -1008,8 +1030,10 @@ def can_access_recording(conn: sqlite3.Connection, recording_id: str, user: dict
         raise HTTPException(status_code=403, detail="admin console has no recording library")
     if rec["owner_id"] == user["id"]:
         return rec
-    if user["role"] == "manager" and rec["team_id"] in (user.get("managed_team_ids") or []):
-        return rec
+    if user["role"] == "manager":
+        managed = user.get("managed_team_ids") or []
+        if "*" in managed or rec["team_id"] in managed:
+            return rec
     raise HTTPException(status_code=403, detail="recording is outside current permission scope")
 
 
@@ -1904,6 +1928,7 @@ def transcribe_recording(recording_id: str, user: dict[str, Any], segment_second
         conn.execute("update recordings set asr_status = ?, updated_at = ? where id = ?", ("running", now(), recording_id))
         conn.execute("delete from transcript_segments where recording_id = ?", (recording_id,))
         conn.execute("delete from summaries where recording_id = ?", (recording_id,))
+        conn.execute("delete from emotion_analyses where recording_id = ?", (recording_id,))
         conn.execute("update recordings set summary_status = ? where id = ?", ("pending", recording_id))
         conn.commit()
 
@@ -2033,6 +2058,58 @@ def meeting_focus_instruction(meeting_type: str) -> str:
             "对话中的明确结论和待确认问题。"
         )
     return "根据会议类型保留业务背景、讨论细节、明确结论、待确认问题和可追溯原文证据。"
+
+
+def meeting_template(meeting_type: str) -> str:
+    """每类会议的专属纪要结构骨架。AI 按对应结构逐节输出，无内容的小节写“未明确”。
+    顶部「会议信息/一句话概览」与底部「关键原文证据」是所有类型共用的壳，
+    中间板块按会议类型切换。"""
+    head = ["# 会议纪要", "## 会议信息", "## 一句话概览"]
+    foot = ["## 关键原文证据"]
+    bodies = {
+        "销售电话": [
+            "## 通话背景（客户 / 联系人 / 来电由头）",
+            "## 客户现状与关注点",
+            "## 产品 / 服务匹配讨论",
+            "## 价格 / 周期 / 竞品 / 决策链线索",
+            "## 关键结论",
+            "## 待确认问题",
+        ],
+        "客户调研": [
+            "## 客户业务背景",
+            "## 当前系统与流程现状",
+            "## 涉及部门 / 岗位",
+            "## 痛点与关注点",
+            "## 预算 / 周期 / 范围（已明确提到的）",
+            "## 客户原话与待澄清点",
+        ],
+        "方案汇报": [
+            "## 方案范围与模块能力",
+            "## 客户反馈",
+            "## 异议与澄清",
+            "## 部署 / 集成 / 数据口径",
+            "## 报价与边界讨论",
+            "## 达成共识与仍需确认",
+        ],
+        "内部会议": [
+            "## 复盘主线（客户 / 商机 / 项目阶段）",
+            "## 讨论细节与现场判断",
+            "## 争议点",
+            "## 资源 / 报价 / 方案 / 交付边界",
+            "## 关键结论",
+            "## 待确认问题",
+        ],
+    }
+    default_body = [
+        "## 核心摘要",
+        "## 讨论主线",
+        "## 重点议题详述",
+        "## 客户 / 项目 / 商机信息沉淀",
+        "## 关键结论",
+        "## 待确认问题",
+    ]
+    body = bodies.get((meeting_type or "").strip(), default_body)
+    return "\n".join(head + body + foot)
 
 
 def env_int(name: str, default: int, minimum: int, maximum: int) -> int:
@@ -2518,17 +2595,8 @@ async def call_deepseek_summary(text: str, rec: dict[str, Any]) -> tuple[str, st
                         "- 对长会议，要按客户/项目/模块/流程分组，合并重复表达，但保留具体名称和关键数字。\n"
                         "- 关键原文证据要分散覆盖主要议题，不要只引用开头几分钟。\n"
                         "- 不要出现“行动项”“待办”“下一步”“跟进事项”等表述。\n\n"
-                        "固定结构：\n"
-                        "# 会议纪要\n"
-                        "## 会议信息\n"
-                        "## 一句话概览\n"
-                        "## 核心摘要\n"
-                        "## 讨论主线\n"
-                        "## 重点议题详述\n"
-                        "## 客户 / 项目 / 商机信息沉淀\n"
-                        "## 关键结论\n"
-                        "## 待确认问题\n"
-                        "## 关键原文证据\n\n"
+                        "请严格按以下结构输出（小节标题和顺序保持不变；某节无内容就写“未明确”，不要删节也不要新增顶级小节）：\n"
+                        + meeting_template(rec.get("meeting_type") or "") + "\n\n"
                         + "\n\n".join(partials)
                     ),
                 },
@@ -2575,6 +2643,7 @@ async def call_deepseek_revision(instruction: str, base_summary: str, transcript
                     f"录音时长：{rec['duration_label']}\n\n"
                     f"深度要求：{depth}\n"
                     f"类型侧重点：{focus}\n\n"
+                    f"目标结构（除非用户明确要求改结构，否则按此组织小节）：\n{meeting_template(rec.get('meeting_type') or '')}\n\n"
                     f"用户修改要求：\n{instruction}\n\n"
                     f"当前纪要：\n{base_summary}\n\n"
                     f"转写文本校验依据：\n{transcript_context}\n\n"
@@ -2746,6 +2815,12 @@ def write_export(recording_id: str, kind: str, user: dict[str, Any]) -> Path:
                 raise HTTPException(status_code=404, detail="summary not found")
             content = summary["content"]
             suffix = f"纪要_v{summary.get('version') or 1}"
+        elif kind == "emotion":
+            emotion = current_emotion_analysis(conn, recording_id)
+            if not emotion:
+                raise HTTPException(status_code=404, detail="emotion analysis not found")
+            content = emotion["content"]
+            suffix = f"情绪分析_v{emotion.get('version') or 1}"
         else:
             raise HTTPException(status_code=404, detail="unknown export")
     path = EXPORTS / f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{slug(rec['title'])}_{suffix}.md"
@@ -2768,6 +2843,293 @@ def write_summary_export(recording_id: str, summary_id: str, user: dict[str, Any
         path = EXPORTS / f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{slug(rec['title'])}_{suffix}.md"
         path.write_text(summary["content"], encoding="utf-8")
         return path
+
+
+# ---------------------------------------------------------------------------
+# 对话情绪分析（独立的第 3 类产物）
+#   B 声学层：emotion2vec 逐段识别说话情绪（生气/难过/开心…）
+#   A 语义层：DeepSeek 结合带情绪标注的转写做对话情绪分析（意向 + 异议）
+#   只导出 markdown；不产出任何行动项 / 跟进建议。
+# ---------------------------------------------------------------------------
+
+_EMOTION_CN = {
+    "生气": "生气", "angry": "生气", "厌恶": "厌恶", "disgusted": "厌恶",
+    "恐惧": "恐惧", "fearful": "恐惧", "开心": "开心", "happy": "开心",
+    "中立": "中立", "neutral": "中立", "难过": "难过", "sad": "难过",
+    "吃惊": "吃惊", "surprised": "吃惊", "其他": "其他", "other": "其他",
+    "unknown": "未知", "<unk>": "未知",
+}
+_EMOTION_NEGATIVE = {"生气", "厌恶", "恐惧", "难过"}
+
+
+def emotion_label_cn(raw: str) -> str:
+    parts = [p.strip() for p in str(raw or "").split("/") if p.strip()]
+    for p in parts:
+        if p in _EMOTION_CN:
+            return _EMOTION_CN[p]
+    return parts[0] if parts else "未知"
+
+
+def get_emotion_model() -> Any:
+    global _emotion_model
+    if _emotion_model is None:
+        with _emotion_init_lock:
+            if _emotion_model is None:
+                if not EMOTION.exists():
+                    raise RuntimeError(f"情绪模型缺失：{EMOTION}")
+                from funasr import AutoModel
+
+                _emotion_model = AutoModel(model=str(EMOTION), disable_update=True)
+    return _emotion_model
+
+
+def analyze_segment_emotion(wav_path: str) -> tuple[str, float]:
+    with _asr_lock:
+        res = get_emotion_model().generate(wav_path, granularity="utterance", extract_embedding=False)
+    if not res:
+        return "未知", 0.0
+    item = res[0]
+    labels = [emotion_label_cn(x) for x in (item.get("labels") or [])]
+    scores = [float(s) for s in (item.get("scores") or [])]
+    if not labels or not scores:
+        return "未知", 0.0
+    top = max(range(len(scores)), key=lambda i: scores[i])
+    return labels[top], round(scores[top], 3)
+
+
+def analyze_acoustic_emotions(rec: dict[str, Any], segments: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """逐段跑 emotion2vec。只取 >=1.2s 的段，最多 220 段（超出时优先取长段），
+    避免几百个碎段拖慢。音频缺失时返回空，让语义层退化为纯文本分析。"""
+    import shutil
+
+    src = Path(rec.get("file_path") or "")
+    if not src.exists():
+        return [], {}
+    cands = [s for s in segments if (float(s.get("end_sec") or 0) - float(s.get("start_sec") or 0)) >= 1.2]
+    if len(cands) > 220:
+        cands = sorted(cands, key=lambda s: float(s.get("end_sec") or 0) - float(s.get("start_sec") or 0), reverse=True)[:220]
+        cands = sorted(cands, key=lambda s: float(s.get("start_sec") or 0))
+    per_segment: list[dict[str, Any]] = []
+    workdir = TMP / f"emotion_{rec['id']}_{uuid.uuid4().hex[:8]}"
+    workdir.mkdir(parents=True, exist_ok=True)
+    try:
+        for idx, seg in enumerate(cands):
+            start = float(seg.get("start_sec") or 0.0)
+            end = float(seg.get("end_sec") or 0.0)
+            speaker = seg.get("speaker_name") or (f"Speaker {seg.get('speaker')}" if seg.get("speaker") is not None else "未知")
+            clip = workdir / f"seg_{idx}.wav"
+            try:
+                extract_interval(src, clip, start, min(end, start + 20.0))
+                emotion, score = analyze_segment_emotion(str(clip))
+            except Exception:
+                continue
+            finally:
+                try:
+                    clip.unlink()
+                except Exception:
+                    pass
+            per_segment.append({
+                "start": start,
+                "start_label": seg.get("start_label") or seconds_label(start),
+                "speaker": speaker,
+                "emotion": emotion,
+                "score": score,
+                "text": (seg.get("text") or "")[:60],
+            })
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+    stats: dict[str, Any] = {}
+    for item in per_segment:
+        st = stats.setdefault(item["speaker"], {"count": 0, "emotions": {}, "negative": 0})
+        st["count"] += 1
+        st["emotions"][item["emotion"]] = st["emotions"].get(item["emotion"], 0) + 1
+        if item["emotion"] in _EMOTION_NEGATIVE:
+            st["negative"] += 1
+    for st in stats.values():
+        st["dominant"] = max(st["emotions"], key=st["emotions"].get) if st["emotions"] else "未知"
+        st["negative_ratio"] = round(st["negative"] / st["count"], 2) if st["count"] else 0.0
+    return per_segment, stats
+
+
+def acoustic_markdown(per_speaker: dict[str, Any], per_segment: list[dict[str, Any]]) -> str:
+    lines = ["## 声学情绪分布（emotion2vec 逐段识别）", ""]
+    if not per_segment:
+        lines.append("> 转写段落过短或音频缺失，本次未做声学情绪识别，以上分析仅基于文本。")
+        return "\n".join(lines)
+    lines.append("| 说话人 | 主导情绪 | 负面占比 | 采样段数 | 情绪分布 |")
+    lines.append("|---|---|---|---|---|")
+    for sp, st in sorted(per_speaker.items(), key=lambda kv: -kv[1]["count"]):
+        dist = "、".join(f"{e}×{n}" for e, n in sorted(st["emotions"].items(), key=lambda kv: -kv[1]))
+        lines.append(f"| {sp} | {st['dominant']} | {int(st['negative_ratio'] * 100)}% | {st['count']} | {dist} |")
+    peaks = [s for s in per_segment if s["emotion"] in _EMOTION_NEGATIVE and s["score"] >= 0.6][:12]
+    if peaks:
+        lines += ["", "**声学上情绪强烈的片段（负面，置信 ≥ 0.6）：**", ""]
+        for p in peaks:
+            lines.append(f"- `{p['start_label']}` {p['speaker']}（{p['emotion']} {p['score']}）：{p['text']}")
+    return "\n".join(lines)
+
+
+def emotion_annotated_transcript(conn: sqlite3.Connection, recording_id: str, per_segment: list[dict[str, Any]]) -> str:
+    emo_by_start = {round(s["start"], 1): (s["emotion"], s["score"]) for s in per_segment}
+    rows = conn.execute(
+        "select start_label, end_sec, start_sec, speaker, speaker_name, text from transcript_segments where recording_id = ? order by start_sec",
+        (recording_id,),
+    ).fetchall()
+    lines = []
+    for row in rows:
+        label = row["speaker_name"] or f"Speaker {row['speaker']}"
+        emo = emo_by_start.get(round(float(row["start_sec"] or 0), 1))
+        tag = f"（声学:{emo[0]}{emo[1]}）" if emo else ""
+        lines.append(f"[{row['start_label']}-{seconds_label(row['end_sec'])}] {label}{tag}: {row['text']}")
+    return "\n".join(lines)
+
+
+def call_deepseek_emotion(annotated_transcript: str, rec: dict[str, Any], acoustic_md: str) -> tuple[str, str]:
+    api_key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
+    base = os.environ.get("DEEPSEEK_API_BASE", "https://api.deepseek.com").rstrip("/")
+    model = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-pro")
+    if not api_key:
+        raise RuntimeError("DEEPSEEK_API_KEY is not configured")
+    transcript = annotated_transcript
+    if len(transcript) > 48000:
+        transcript = transcript[:26000] + "\n\n[中间过长省略，仅保留首尾]\n\n" + transcript[-18000:]
+    payload = {
+        "model": model,
+        "temperature": 0.3,
+        "max_tokens": env_int("NEWVOICE_EMOTION_MAX_TOKENS", 6000, 2000, 12000),
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "你是销售 / 项目对话的情绪分析专家。基于带时间戳和声学情绪标注的对话转写，分析对话里的情绪与态度。"
+                    "“（声学:情绪+置信）”来自语音情绪模型，是辅助证据，要结合说话内容判断，不要照搬数字。"
+                    "重点突出情绪本身：整体氛围松紧、各方参与度、是否有防御 / 抵触 / 不耐烦 / 敷衍 / 热情，以及客户的购买意向信号和异议顾虑。"
+                    "只基于转写内容，不编造；不确定的写“疑似”。"
+                    "严禁输出行动项、待办、下一步、跟进建议或任何 CRM 模块——这是情绪分析，不是会议纪要。"
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"录音标题：{rec.get('title')}\n会议类型：{rec.get('meeting_type')}\n时长：{rec.get('duration_label')}\n\n"
+                    "请严格按以下结构输出 Markdown（小节顺序不变；无内容的小节写“未明确”）：\n"
+                    "# 对话情绪分析\n"
+                    "## 整体情绪基调\n"
+                    "## 各方情绪画像\n"
+                    "## 情绪转折点\n"
+                    "## 客户意向信号\n"
+                    "## 异议与顾虑\n\n"
+                    "每节尽量引用时间戳和原话作为证据；“各方情绪画像”按说话人分别写参与度与情绪主线。\n\n"
+                    f"【声学情绪概览】\n{acoustic_md}\n\n"
+                    f"【带情绪标注的对话转写】\n{transcript}\n"
+                ),
+            },
+        ],
+    }
+    chat_url = f"{base}/chat/completions"
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    last_err: Any = None
+    with httpx.Client(timeout=180) as client:
+        for attempt in range(3):
+            try:
+                res = client.post(chat_url, headers=headers, json=payload)
+                if res.status_code >= 500:
+                    last_err = RuntimeError(f"DeepSeek HTTP {res.status_code}: {res.text[:200]}")
+                    time.sleep(1.5 * (attempt + 1))
+                    continue
+                if res.status_code >= 400:
+                    raise RuntimeError(f"DeepSeek HTTP {res.status_code}: {res.text[:300]}")
+                return res.json()["choices"][0]["message"]["content"], model
+            except httpx.RequestError as exc:
+                last_err = exc
+                time.sleep(1.5 * (attempt + 1))
+    raise RuntimeError(f"DeepSeek 调用失败：{last_err}")
+
+
+def next_emotion_version(conn: sqlite3.Connection, recording_id: str) -> int:
+    row = conn.execute(
+        "select coalesce(max(version), 0) from emotion_analyses where recording_id = ?",
+        (recording_id,),
+    ).fetchone()
+    return int(row[0]) + 1
+
+
+def current_emotion_analysis(conn: sqlite3.Connection, recording_id: str) -> dict[str, Any] | None:
+    return rowdict(
+        conn.execute(
+            """
+            select * from emotion_analyses
+            where recording_id = ?
+            order by is_current desc, version desc, created_at desc
+            limit 1
+            """,
+            (recording_id,),
+        ).fetchone()
+    )
+
+
+def generate_emotion_analysis(recording_id: str, user: dict[str, Any]) -> dict[str, Any]:
+    with db() as conn:
+        rec = can_access_recording(conn, recording_id, user)
+        if rec["asr_status"] != "done":
+            raise HTTPException(status_code=409, detail="转写尚未完成")
+        segments = rowsdict(
+            conn.execute(
+                "select * from transcript_segments where recording_id = ? order by start_sec",
+                (recording_id,),
+            ).fetchall()
+        )
+        if not segments:
+            raise HTTPException(status_code=409, detail="转写为空")
+        task_id = create_task(conn, recording_id, rec["title"], "对话情绪分析")
+        version = next_emotion_version(conn, recording_id)
+        conn.commit()
+
+    try:
+        per_segment, per_speaker = analyze_acoustic_emotions(rec, segments)
+        acoustic_md = acoustic_markdown(per_speaker, per_segment)
+        with db() as conn:
+            annotated = emotion_annotated_transcript(conn, recording_id, per_segment)
+        analysis_md, model = call_deepseek_emotion(annotated, rec, acoustic_md)
+        content = analysis_md.rstrip() + "\n\n" + acoustic_md + "\n"
+        model_label = f"emotion2vec_plus_large + {model}"
+        with db() as conn:
+            emotion_id = str(uuid.uuid4())
+            conn.execute("update emotion_analyses set is_current = 0 where recording_id = ?", (recording_id,))
+            conn.execute(
+                "insert into emotion_analyses(id,recording_id,content,model,acoustic_json,created_at,version,is_current) values(?,?,?,?,?,?,?,?)",
+                (
+                    emotion_id,
+                    recording_id,
+                    content,
+                    model_label,
+                    json.dumps({"per_speaker": per_speaker, "segments": per_segment[:400]}, ensure_ascii=False),
+                    now(),
+                    version,
+                    1,
+                ),
+            )
+            update_task(conn, task_id, "done", 100)
+            audit(conn, user, "emotion", f"生成对话情绪分析：{rec['title']}，模型 {model_label}。")
+        return {"recording_id": recording_id, "emotion_id": emotion_id, "model": model_label, "version": version}
+    except HTTPException:
+        with db() as conn:
+            update_task(conn, task_id, "failed", 100, "emotion analysis failed")
+        raise
+    except Exception as exc:
+        with db() as conn:
+            update_task(conn, task_id, "failed", 100, str(exc))
+            audit(conn, user, "emotion", f"对话情绪分析失败：{rec['title']}。")
+        raise HTTPException(status_code=500, detail=f"emotion analysis failed: {exc}") from exc
+
+
+def run_emotion_job(recording_id: str, user: dict[str, Any]) -> None:
+    """Background worker for emotion analysis. Failures are already recorded on
+    the task row by generate_emotion_analysis, so just swallow the exception."""
+    try:
+        generate_emotion_analysis(recording_id, user)
+    except Exception:
+        pass
 
 
 def process_recording_background(recording_id: str, user: dict[str, Any]) -> None:
@@ -2885,9 +3247,11 @@ def users(
         args.append(user["id"])
     elif user["role"] == "manager":
         team_ids = user.get("managed_team_ids") or ([user["team_id"]] if user.get("team_id") else [])
-        placeholders = ",".join("?" for _ in team_ids) or "?"
-        filters.append(f"(id = ? or team_id in ({placeholders}))")
-        args.extend([user["id"], *(team_ids or ["__none__"])])
+        if "*" not in team_ids:
+            placeholders = ",".join("?" for _ in team_ids) or "?"
+            filters.append(f"(id = ? or team_id in ({placeholders}))")
+            args.extend([user["id"], *(team_ids or ["__none__"])])
+        # "*" → 业务管理员，看全部用户，不加过滤
     if role:
         filters.append("role = ?")
         args.append(role)
@@ -3037,11 +3401,21 @@ def wecom_config(conn: sqlite3.Connection, include_secret: bool = False) -> dict
 
 
 def wecom_api_get(client: httpx.Client, path: str, params: dict[str, Any]) -> dict[str, Any]:
-    res = client.get(f"https://qyapi.weixin.qq.com{path}", params=params)
-    res.raise_for_status()
-    data = res.json()
+    # All failures here are raised as HTTPException, never a bare exception:
+    # an unhandled error bubbles to a 500 emitted OUTSIDE the CORS middleware,
+    # so it has no CORS headers and the browser surfaces a useless "Network
+    # Error" instead of WeCom's real message (e.g. "invalid corpid").
+    try:
+        res = client.get(f"https://qyapi.weixin.qq.com{path}", params=params)
+        res.raise_for_status()
+        data = res.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        raise HTTPException(status_code=502, detail=f"企业微信接口 {path} 请求失败：{exc}") from exc
     if data.get("errcode") not in (0, None):
-        raise RuntimeError(f"WeCom API {path} failed: {data.get('errmsg') or data.get('errcode')}")
+        raise HTTPException(
+            status_code=502,
+            detail=f"企业微信接口 {path} 返回错误 {data.get('errcode')}：{data.get('errmsg') or ''}".strip(),
+        )
     return data
 
 
@@ -3552,6 +3926,7 @@ def recording_detail(recording_id: str, user: dict[str, Any] = Depends(current_u
                 (recording_id,),
             ).fetchall()
         )
+        emotion = current_emotion_analysis(conn, recording_id)
         tasks = [
             task_payload(dict(row), rec["duration"])
             for row in conn.execute(
@@ -3588,11 +3963,26 @@ def recording_detail(recording_id: str, user: dict[str, Any] = Depends(current_u
                     "version": summary.get("version") or 1,
                 }
             )
+        if emotion:
+            outputs.append(
+                {
+                    "id": emotion["id"],
+                    "kind": "emotion",
+                    "title": f"对话情绪分析 v{emotion.get('version') or 1}",
+                    "format": "Markdown",
+                    "status": "done",
+                    "download_url": f"/api/recordings/{recording_id}/export/emotion.md",
+                    "model": emotion["model"],
+                    "created_at": emotion["created_at"],
+                    "version": emotion.get("version") or 1,
+                }
+            )
         return {
             "recording": rec_payload,
             "segments": segments,
             "summary": summary,
             "summaries": summaries,
+            "emotion_analysis": emotion,
             "tasks": tasks,
             "outputs": outputs,
             "hotword_package": hotword_package,
@@ -3667,6 +4057,32 @@ def export_summary(recording_id: str, user: dict[str, Any] = Depends(current_use
 @app.get("/api/recordings/{recording_id}/export/summaries/{summary_id}.md")
 def export_summary_version(recording_id: str, summary_id: str, user: dict[str, Any] = Depends(current_user)) -> FileResponse:
     path = write_summary_export(recording_id, summary_id, user)
+    return FileResponse(path, media_type="text/markdown; charset=utf-8", filename=path.name)
+
+
+@app.post("/api/recordings/{recording_id}/emotion")
+def emotion_api(
+    recording_id: str,
+    background_tasks: BackgroundTasks,
+    user: dict[str, Any] = Depends(current_user),
+) -> dict[str, Any]:
+    with db() as conn:
+        rec = can_access_recording(conn, recording_id, user)
+        if rec["asr_status"] != "done":
+            raise HTTPException(status_code=409, detail="转写完成后才能做情绪分析")
+        count = conn.execute(
+            "select count(*) from transcript_segments where recording_id = ?",
+            (recording_id,),
+        ).fetchone()[0]
+        if not count:
+            raise HTTPException(status_code=409, detail="转写为空")
+    background_tasks.add_task(run_emotion_job, recording_id, dict(user))
+    return {"status": "started", "recording_id": recording_id}
+
+
+@app.get("/api/recordings/{recording_id}/export/emotion.md")
+def export_emotion(recording_id: str, user: dict[str, Any] = Depends(current_user)) -> FileResponse:
+    path = write_export(recording_id, "emotion", user)
     return FileResponse(path, media_type="text/markdown; charset=utf-8", filename=path.name)
 
 

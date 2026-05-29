@@ -1,9 +1,9 @@
 import { useMemo } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { exportSummaryVersionUrl, exportTranscriptUrl } from "@/api/endpoints";
+import { exportEmotionUrl, exportSummaryVersionUrl, exportTranscriptUrl } from "@/api/endpoints";
 import { Icon } from "@/components/Icon";
-import type { Summary, TranscriptSegment } from "@/api/types";
+import type { EmotionAnalysis, Summary, TranscriptSegment } from "@/api/types";
 
 export type ArtifactKey = string;
 // "summary:<id>" | "transcript"
@@ -11,11 +11,13 @@ export function summaryArtifactKey(summary: Summary): ArtifactKey {
   return `summary:${summary.id}`;
 }
 export const TRANSCRIPT_KEY: ArtifactKey = "transcript";
+export const EMOTION_KEY: ArtifactKey = "emotion";
 
 interface Props {
   recordingId: string;
   summaries: Summary[];
   segments: TranscriptSegment[];
+  emotion: EmotionAnalysis | null;
   /** Which artifact is being previewed. Caller hides the rail entirely when
    *  null (via .is-closed), so this component always renders something. */
   selected: ArtifactKey;
@@ -38,37 +40,45 @@ function transcriptMarkdown(segments: TranscriptSegment[]): string {
   return lines.join("\n");
 }
 
-export function Preview({ recordingId, summaries, segments, selected, onSelect, onClose }: Props) {
+export function Preview({ recordingId, summaries, segments, emotion, selected, onSelect, onClose }: Props) {
   const currentSummary = useMemo(() => {
     if (!selected.startsWith("summary:")) return null;
     const id = selected.slice("summary:".length);
     return summaries.find((s) => s.id === id) ?? null;
   }, [selected, summaries]);
   const isTranscript = selected === TRANSCRIPT_KEY;
+  const isEmotion = selected === EMOTION_KEY;
 
   const markdown = useMemo(() => {
     if (currentSummary) return currentSummary.content;
     if (isTranscript) return transcriptMarkdown(segments);
+    if (isEmotion) return emotion?.content ?? "_还没有情绪分析。_";
     return "";
-  }, [currentSummary, isTranscript, segments]);
+  }, [currentSummary, isTranscript, isEmotion, emotion, segments]);
 
   const displayName = currentSummary
     ? `会议纪要 v${currentSummary.version}`
     : isTranscript
       ? "逐字稿"
-      : "";
+      : isEmotion
+        ? "对话情绪分析"
+        : "";
 
   const downloadHref = currentSummary
     ? exportSummaryVersionUrl(recordingId, currentSummary.id)
     : isTranscript
       ? exportTranscriptUrl(recordingId)
-      : null;
+      : isEmotion
+        ? exportEmotionUrl(recordingId)
+        : null;
 
   const metaText = currentSummary
     ? `${currentSummary.model}${currentSummary.is_current ? " · 当前版本" : ""}`
     : isTranscript
       ? `${segments.length} 段发言`
-      : "";
+      : isEmotion
+        ? emotion?.model ?? ""
+        : "";
 
   return (
     <div
@@ -80,7 +90,7 @@ export function Preview({ recordingId, summaries, segments, selected, onSelect, 
         <span className="preview-title">{displayName}</span>
         <span className="preview-meta">{metaText}</span>
         <div className="preview-actions">
-          {summaries.length + (segments.length > 0 ? 1 : 0) > 1 && (
+          {summaries.length + (segments.length > 0 ? 1 : 0) + (emotion ? 1 : 0) > 1 && (
             <select
               className="field"
               style={{ width: 168, height: 28, fontSize: "var(--text-xs)" }}
@@ -94,6 +104,7 @@ export function Preview({ recordingId, summaries, segments, selected, onSelect, 
                   {s.is_current ? " · 当前" : ""}
                 </option>
               ))}
+              {emotion && <option value={EMOTION_KEY}>对话情绪分析</option>}
               {segments.length > 0 && (
                 <option value={TRANSCRIPT_KEY}>逐字稿</option>
               )}
