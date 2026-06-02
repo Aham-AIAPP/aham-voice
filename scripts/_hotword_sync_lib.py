@@ -112,6 +112,26 @@ def valid_term(text: str) -> bool:
     return True
 
 
+_FORMAL_ORG_MARKER = re.compile(r"(公司|集团|股份|有限|责任)")
+
+
+def is_speakable_hotword(word: str) -> bool:
+    """只有能被口语说出口的短词才值得入热词库当 ASR 偏置。超长全称（含
+    公司/集团/股份等组织形式词）口语召回≈0，留着只会让 seaco 误偏置，不入库。
+    阈值用 NEWVOICE_HOTWORD_MAX_LEN（默认 8）。"""
+    w = (word or "").strip()
+    try:
+        max_len = int(os.environ.get("NEWVOICE_HOTWORD_MAX_LEN", "8"))
+    except ValueError:
+        max_len = 8
+    max_len = max(4, min(20, max_len))
+    if not (2 <= len(w) <= max_len):
+        return False
+    if _FORMAL_ORG_MARKER.search(w):
+        return False
+    return True
+
+
 _PROVINCES = (
     "北京|上海|天津|重庆|河北|山西|辽宁|吉林|黑龙江|江苏|浙江|安徽|福建|江西|山东|河南|湖北|湖南|"
     "广东|海南|四川|贵州|云南|陕西|甘肃|青海|台湾|内蒙古|广西|西藏|宁夏|新疆|香港|澳门"
@@ -430,6 +450,9 @@ def upsert_hotwords(
     ts = now_str()
     for cand in candidates:
         word = cand["word"]
+        if not is_speakable_hotword(word):
+            counts["skipped"] += 1
+            continue
         key = word.lower()
         source_key = f"{source_name}:{word}"
         kind = cand["kind"]

@@ -486,6 +486,7 @@ def ensure_schema() -> None:
             "crm_relation_target_id": "text",
             "crm_relation_target_name": "text",
             "crm_sync_response": "text not null default '{}'",
+            "expected_speakers": "integer",
         }
         for column, definition in recording_migrations.items():
             if column not in recording_cols:
@@ -1624,13 +1625,22 @@ def match_speaker_profiles(rec: dict[str, Any], sentence_info: list[dict[str, An
     return matches
 
 
+# 组织形式词：口语里没人说全称（"…有限公司"），留着只会让 seaco 在听不清时
+# 误偏置硬凑出来。带这些词或超长的，一律不喂给 ASR。
+_FORMAL_ORG_MARKER = re.compile(r"(公司|集团|股份|有限|责任)")
+
+
 def valid_asr_hotword(text: str) -> bool:
     value = text.strip()
-    if len(value) < 2 or len(value) > 36:
+    # 只喂能被说出口的短词：超长全称口语召回≈0、且会误偏置。
+    max_len = env_int("NEWVOICE_HOTWORD_MAX_LEN", 8, 4, 20)
+    if len(value) < 2 or len(value) > max_len:
         return False
     if re.search(r"\s", value):
         return False
     if value.isdigit() or code_like_hotword(value):
+        return False
+    if _FORMAL_ORG_MARKER.search(value):
         return False
     return True
 
@@ -1948,6 +1958,10 @@ def transcribe_recording(recording_id: str, user: dict[str, Any], segment_second
         }
         if hotword_text:
             generate_kwargs["hotword"] = hotword_text
+        expected_spk = rec_for_package.get("expected_speakers")
+        if expected_spk and int(expected_spk) >= 2:
+            # 用户填了预计人数 → 固定聚类簇数，避免 CAM++ 过度聚类。
+            generate_kwargs["preset_spk_num"] = int(expected_spk)
         with _asr_lock:
             result = model.generate(**generate_kwargs)
         if not result:
@@ -2093,7 +2107,7 @@ def meeting_template(meeting_type: str) -> str:
         ],
         "内部会议": [
             "## 复盘主线（客户 / 商机 / 项目阶段）",
-            "## 讨论细节与现场判断",
+            "## 各汇报人分述（能识别汇报人时每人一节，逐个过其名下项目：阶段/卡点/策略/结论）",
             "## 争议点",
             "## 资源 / 报价 / 方案 / 交付边界",
             "## 关键结论",
@@ -2577,6 +2591,9 @@ async def call_deepseek_summary(text: str, rec: dict[str, Any]) -> tuple[str, st
                     "content": (
                         "你是企业内部会议纪要助手。输出信息丰富、层次清楚、可追溯的 Markdown 纪要。"
                         "只基于转写和分块素材，不编造事实；不确定内容必须标注“疑似”或“未明确”。"
+                        "重要：转写里的公司/项目/人名可能被语音识别带偏或张冠李戴——突兀的长全称"
+                        "（尤其含“有限公司/集团”且只出现一两次的）不要当成标准项目名，优先用口语高频的简称；"
+                        "同一项目出现多个候选名时取最一致的那个；项目归属（谁负责/哪个客户）拿不准就标“疑似”，绝不硬编。"
                         "禁止输出或提及行动项、待办、下一步、风险、客户需求、CRM 跟进模块。"
                     ),
                 },
@@ -2632,6 +2649,7 @@ async def call_deepseek_revision(instruction: str, base_summary: str, transcript
                 "content": (
                     "你是企业内部会议纪要助手。根据用户修改要求重写完整 Markdown 纪要。"
                     "保持信息丰富、结构清楚、可追溯；只基于原纪要和转写文本，不编造事实。"
+                    "转写里的公司/项目/人名可能被语音识别带偏——突兀的长全称不要当标准名、优先口语简称，归属拿不准标“疑似”。"
                     "禁止输出或提及行动项、待办、下一步、风险、客户需求、CRM 跟进模块。"
                 ),
             },
@@ -3808,6 +3826,7 @@ def upload_recording(
     meeting_type: str = Form("内部会议"),
     tag: str = Form(""),
     auto_process: bool = Form(True),
+    expected_speakers: int | None = Form(None),
     user: dict[str, Any] = Depends(current_user),
 ) -> dict[str, Any]:
     if user["role"] == "admin":
@@ -3846,8 +3865,8 @@ def upload_recording(
     with db() as conn:
         conn.execute(
             """
-            insert into recordings(id,title,filename,file_path,meeting_type,tag,owner_id,team_id,duration,duration_label,asr_status,summary_status,created_at,updated_at)
-            values(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            insert into recordings(id,title,filename,file_path,meeting_type,tag,owner_id,team_id,duration,duration_label,asr_status,summary_status,expected_speakers,created_at,updated_at)
+            values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 rec_id,
@@ -3862,6 +3881,7 @@ def upload_recording(
                 seconds_label(duration),
                 "queued" if auto_process else "pending",
                 "pending",
+                (expected_speakers if (expected_speakers and 2 <= expected_speakers <= 50) else None),
                 now(),
                 now(),
             ),
@@ -4736,6 +4756,44 @@ def patch_recording_speaker(recording_id: str, speaker: str, payload: dict[str, 
         conn.execute("update recordings set updated_at = ? where id = ?", (now(), recording_id))
         audit(conn, user, "voiceprint.assign", f"{user['name']} 将录音《{rec['title']}》的 Speaker {speaker} 标记为{name}。")
     return {"recording_id": recording_id, "speaker": speaker, "name": name, "updated_segments": cursor.rowcount}
+
+
+@app.post("/api/recordings/{recording_id}/speakers/merge")
+def merge_recording_speakers(recording_id: str, payload: dict[str, Any], user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+    """把过度聚类拆出来的多个 Speaker 合并成一个人：from 的所有段并入 into。"""
+    src = str(payload.get("from") or "").strip()
+    dst = str(payload.get("into") or "").strip()
+    if not src or not dst:
+        raise HTTPException(status_code=400, detail="from / into are required")
+    if src == dst:
+        raise HTTPException(status_code=400, detail="from and into must differ")
+    with db() as conn:
+        rec = can_access_recording(conn, recording_id, user)
+        cursor = conn.execute(
+            "update transcript_segments set speaker = ? where recording_id = ? and speaker = ?",
+            (dst, recording_id, src),
+        )
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=404, detail="source speaker not found")
+        # 若 into 已命名，把整簇统一成该姓名 / 声纹
+        named = rowdict(
+            conn.execute(
+                """
+                select speaker_name, voiceprint_id from transcript_segments
+                where recording_id = ? and speaker = ? and speaker_name is not null and speaker_name != ''
+                order by start_sec limit 1
+                """,
+                (recording_id, dst),
+            ).fetchone()
+        )
+        if named and named.get("speaker_name"):
+            conn.execute(
+                "update transcript_segments set speaker_name = ?, voiceprint_id = coalesce(?, voiceprint_id) where recording_id = ? and speaker = ?",
+                (named["speaker_name"], named.get("voiceprint_id"), recording_id, dst),
+            )
+        conn.execute("update recordings set updated_at = ? where id = ?", (now(), recording_id))
+        audit(conn, user, "speaker.merge", f"{user['name']} 把录音《{rec['title']}》的 Speaker {src} 合并到 Speaker {dst}（{cursor.rowcount} 段）。")
+    return {"recording_id": recording_id, "merged_from": src, "into": dst, "moved_segments": cursor.rowcount}
 
 
 @app.patch("/api/voiceprints/{profile_id}")

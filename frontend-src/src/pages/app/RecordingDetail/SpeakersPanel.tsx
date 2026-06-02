@@ -4,6 +4,7 @@ import {
   createVoiceprintFromRecording,
   fetchSpeakerCandidates,
   fetchVoiceprints,
+  mergeSpeakers,
   renameSpeaker,
   segmentAudioUrl,
 } from "@/api/endpoints";
@@ -60,6 +61,7 @@ export function SpeakersPanel({ recordingId, asrStatus, initialSpeaker }: Props)
   const [profileId, setProfileId] = useState<string>("");
   const [selectedSegments, setSelectedSegments] = useState<string[]>([]);
   const [saveVoiceprint, setSaveVoiceprint] = useState(false);
+  const [mergeTarget, setMergeTarget] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
 
   const rename = useMutation({
@@ -89,6 +91,18 @@ export function SpeakersPanel({ recordingId, asrStatus, initialSpeaker }: Props)
       qc.invalidateQueries({ queryKey: ["speaker-candidates", recordingId] });
       qc.invalidateQueries({ queryKey: ["voiceprints"] });
       setEditing(null);
+    },
+    onError: (err) => setError(readApiError(err)),
+  });
+
+  const merge = useMutation({
+    mutationFn: (payload: { from: string; into: string }) =>
+      mergeSpeakers(recordingId, payload.from, payload.into),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["recording", recordingId] });
+      qc.invalidateQueries({ queryKey: ["speaker-candidates", recordingId] });
+      setEditing(null);
+      setMergeTarget("");
     },
     onError: (err) => setError(readApiError(err)),
   });
@@ -229,6 +243,34 @@ export function SpeakersPanel({ recordingId, asrStatus, initialSpeaker }: Props)
                     </ul>
                   </div>
                 )}
+                <div style={{ borderTop: "1px solid var(--border-default)", paddingTop: "var(--space-3)", display: "flex", gap: "var(--space-2)", alignItems: "center", flexWrap: "wrap" }}>
+                  <span className="meta" style={{ fontSize: "var(--text-xs)" }}>这个说话人被拆多了？合并到：</span>
+                  <select
+                    className="field"
+                    style={{ width: 210 }}
+                    value={mergeTarget}
+                    onChange={(e) => setMergeTarget(e.target.value)}
+                  >
+                    <option value="">选另一个说话人</option>
+                    {candidates.data
+                      .filter((c) => c.speaker !== candidate.speaker)
+                      .map((c) => (
+                        <option key={c.speaker} value={c.speaker}>
+                          {c.display_name}（{c.segment_count} 段）
+                        </option>
+                      ))}
+                  </select>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    disabled={!mergeTarget || merge.isPending}
+                    loading={merge.isPending}
+                    onClick={() => merge.mutate({ from: candidate.speaker, into: mergeTarget })}
+                  >
+                    合并
+                  </Button>
+                </div>
+
                 <div style={{ display: "flex", justifyContent: "flex-end", gap: "var(--space-2)" }}>
                   <Button
                     variant="primary"

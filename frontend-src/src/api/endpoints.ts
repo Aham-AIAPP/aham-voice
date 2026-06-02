@@ -69,6 +69,7 @@ export async function uploadRecording(input: {
   meeting_type?: string;
   tag?: string;
   auto_process?: boolean;
+  expected_speakers?: number | null;
   onProgress?: (pct: number) => void;
 }): Promise<Recording> {
   const form = new FormData();
@@ -77,6 +78,9 @@ export async function uploadRecording(input: {
   if (input.meeting_type) form.append("meeting_type", input.meeting_type);
   if (input.tag) form.append("tag", input.tag);
   form.append("auto_process", String(input.auto_process ?? true));
+  if (input.expected_speakers && input.expected_speakers >= 2) {
+    form.append("expected_speakers", String(input.expected_speakers));
+  }
   const { data } = await api.post<Recording>("/recordings", form, {
     onUploadProgress: (e) => {
       if (input.onProgress && e.total) {
@@ -129,6 +133,11 @@ export async function searchCrmOpportunities(q: string): Promise<{ candidates: O
 
 export async function fetchSpeakerCandidates(id: string): Promise<SpeakerCandidate[]> {
   const { data } = await api.get<SpeakerCandidate[]>(`/recordings/${id}/speaker-candidates`);
+  return data;
+}
+
+export async function mergeSpeakers(recordingId: string, from: string, into: string): Promise<{ moved_segments: number; into: string }> {
+  const { data } = await api.post(`/recordings/${recordingId}/speakers/merge`, { from, into });
   return data;
 }
 

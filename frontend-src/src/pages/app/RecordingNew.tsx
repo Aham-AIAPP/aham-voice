@@ -21,6 +21,7 @@ export function RecordingNew() {
   const [meetingType, setMeetingType] = useState(MEETING_TYPES[0]);
   const [tag, setTag] = useState("");
   const [autoProcess, setAutoProcess] = useState(true);
+  const [expectedSpeakers, setExpectedSpeakers] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [uploadPct, setUploadPct] = useState<number | null>(null);
   const [dragOver, setDragOver] = useState(false);
@@ -76,6 +77,7 @@ export function RecordingNew() {
       meeting_type: meetingType,
       tag: tag.trim(),
       auto_process: autoProcess,
+      expected_speakers: expectedSpeakers ? Number(expectedSpeakers) : null,
       onProgress: (p) => setUploadPct(p),
     });
   }
@@ -154,6 +156,20 @@ export function RecordingNew() {
             value={tag}
             onChange={(e) => setTag(e.target.value)}
             placeholder="如：浙江南都电源 · 储能项目"
+          />
+        </FormRow>
+
+        <FormRow label="预计说话人数" optional htmlFor="rec-spk" hint="填了能让说话人分离更准、避免一个人被拆成好几个。不确定就留空（自动判断）。">
+          <input
+            id="rec-spk"
+            className="field"
+            type="number"
+            min={2}
+            max={50}
+            value={expectedSpeakers}
+            onChange={(e) => setExpectedSpeakers(e.target.value)}
+            placeholder="如：7"
+            style={{ maxWidth: 160 }}
           />
         </FormRow>
 
