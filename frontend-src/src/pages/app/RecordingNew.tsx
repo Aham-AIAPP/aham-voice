@@ -199,7 +199,7 @@ export function RecordingNew() {
         )}
 
         <div style={{ display: "flex", gap: "var(--space-3)", justifyContent: "flex-end" }}>
-          <Button variant="ghost" onClick={() => navigate(-1)} type="button" disabled={mutation.isPending}>
+          <Button variant="ghost" onClick={() => navigate("/app/recordings")} type="button" disabled={mutation.isPending}>
             取消
           </Button>
           <Button

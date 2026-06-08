@@ -37,7 +37,7 @@ export function ChangePassword() {
     setSubmitting(true);
     try {
       const updated = await changePassword(current, next);
-      navigate(updated.role === "admin" ? "/admin/overview" : "/app/workspace", { replace: true });
+      navigate(updated.role === "admin" ? "/admin/overview" : "/app/recordings/new", { replace: true });
     } catch (err) {
       setError(readApiError(err));
     } finally {

@@ -2478,12 +2478,17 @@ async def search_newcrm_opportunities(q: str, user: dict[str, Any]) -> list[dict
     base, token = newcrm_config()
     if not base or not token:
         raise HTTPException(status_code=503, detail="NewCRM sync is not configured")
-    owner_account = newcrm_owner_account(user)
+    # 业务管理员（org-wide，managed_team_ids 含 "*"）搜全部商机，不限本人 ownerAccount；
+    # 普通成员仍只搜自己名下的商机。
+    owner_account = "" if "*" in managed_team_ids(user) else newcrm_owner_account(user)
+    params: dict[str, Any] = {"q": q}
+    if owner_account:
+        params["ownerAccount"] = owner_account
     # trust_env=False — same reason as sync_recording_to_newcrm above.
     async with httpx.AsyncClient(timeout=30, trust_env=False) as client:
         res = await client.get(
             f"{base}/api/external/opportunities/search",
-            params={"q": q, "ownerAccount": owner_account},
+            params=params,
             headers={"Authorization": f"Bearer {token}"},
         )
     data = res.json()
@@ -2497,7 +2502,7 @@ async def _deepseek_post_with_retry(
     url: str,
     api_key: str,
     payload: dict[str, Any],
-    attempts: int = 3,
+    attempts: int = 5,
 ) -> str:
     """POST to a DeepSeek chat-completions endpoint, retrying on 5xx and on
     transient network errors (ConnectError, ReadTimeout, RemoteProtocolError).
@@ -2539,7 +2544,7 @@ async def call_deepseek_summary(text: str, rec: dict[str, Any]) -> tuple[str, st
     focus = meeting_focus_instruction(rec.get("meeting_type") or "")
     partials: list[str] = []
     chat_url = f"{base}/chat/completions"
-    async with httpx.AsyncClient(timeout=180) as client:
+    async with httpx.AsyncClient(timeout=180, trust_env=False) as client:
         for index, chunk in enumerate(chunks, 1):
             payload = {
                 "model": model,
@@ -2670,7 +2675,7 @@ async def call_deepseek_revision(instruction: str, base_summary: str, transcript
             },
         ],
     }
-    async with httpx.AsyncClient(timeout=180) as client:
+    async with httpx.AsyncClient(timeout=180, trust_env=False) as client:
         content = await _deepseek_post_with_retry(client, f"{base}/chat/completions", api_key, payload)
     return content, model
 
@@ -3047,7 +3052,7 @@ def call_deepseek_emotion(annotated_transcript: str, rec: dict[str, Any], acoust
     chat_url = f"{base}/chat/completions"
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     last_err: Any = None
-    with httpx.Client(timeout=180) as client:
+    with httpx.Client(timeout=180, trust_env=False) as client:
         for attempt in range(3):
             try:
                 res = client.post(chat_url, headers=headers, json=payload)
@@ -4365,15 +4370,38 @@ def patch_hotword(hotword_id: str, payload: dict[str, Any], user: dict[str, Any]
         return normalize_hotword(changed)
 
 
+def run_hotword_sync_batch(sources: list[str], user: dict[str, Any], preview: bool) -> None:
+    for item in sources:
+        try:
+            run_hotword_source_sync(item, user, preview=preview)
+        except Exception:
+            # 失败已由 run_hotword_source_sync 记进 hotword_sync_runs；后台任务里吞掉，避免噪声。
+            continue
+
+
 @app.post("/api/hotwords/sync")
-def sync_hotwords(payload: dict[str, Any], user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+def sync_hotwords(payload: dict[str, Any], background_tasks: BackgroundTasks, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+    if user["role"] not in {"manager", "admin"}:
+        raise HTTPException(status_code=403, detail="manager or admin only")
     source = str(payload.get("source") or "all")
     preview = bool(payload.get("preview"))
     sources = ["crm", "wecom-journals"] if source == "all" else [source]
-    results = [run_hotword_source_sync(item, user, preview=preview) for item in sources]
+    for item in sources:
+        if item not in {"crm", "wecom", "wecom-journals"}:
+            raise HTTPException(status_code=400, detail="invalid hotword source")
+    cutoff = (datetime.now() - timedelta(minutes=20)).strftime("%Y-%m-%d %H:%M:%S")
     with db() as conn:
+        busy = conn.execute(
+            "select count(*) from hotword_sync_runs where status = 'running' and started_at >= ?",
+            (cutoff,),
+        ).fetchone()[0]
+        if busy:
+            raise HTTPException(status_code=409, detail="已有同步在后台进行中，请等它跑完再发起。")
         status = hotword_status_payload(conn)
-    return {"ok": True, "results": results, "status": status}
+    # 异步后台跑：同步耗时长（含云端抽词，CRM 可达数分钟），不能阻塞 HTTP——
+    # 前端 axios 180s 会超时，这正是「同步全部从没成功」的根因。
+    background_tasks.add_task(run_hotword_sync_batch, sources, dict(user), preview)
+    return {"ok": True, "started": True, "sources": sources, "preview": preview, "status": status}
 
 
 @app.post("/api/hotwords/maintain")
@@ -4421,9 +4449,14 @@ def resolve_voiceprint_scope(user: dict[str, Any], scope: str = "", team_id: str
     profile_team_id = None
     if requested_scope == "team":
         profile_team_id = team_id or user.get("team_id")
+        mtids = managed_team_ids(user)
         if not profile_team_id:
+            # 业务管理员（org-wide manager，managed_team_ids 含 "*"）或管理员没有固定团队，
+            # 团队声纹退化为全局声纹（全员可见），而不是报错卡住。
+            if user["role"] == "admin" or "*" in mtids:
+                return "global", None
             raise HTTPException(status_code=400, detail="team_id is required for team voiceprint")
-        if user["role"] == "manager" and profile_team_id not in managed_team_ids(user):
+        if user["role"] == "manager" and "*" not in mtids and profile_team_id not in mtids:
             raise HTTPException(status_code=403, detail="team is outside manager scope")
     return requested_scope, profile_team_id
 

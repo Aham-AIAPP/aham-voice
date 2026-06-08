@@ -634,6 +634,86 @@ input[type="radio"] {
   z-index: calc(var(--z-modal) + 1);
 }
 
+/* ---------- 说话人管理面板（抽屉内）------------------------------------- */
+.spk-hint {
+  font-size: var(--text-xs);
+  color: var(--fg-subtle);
+  line-height: 1.5;
+  margin-bottom: var(--space-3);
+}
+.spk-list { display: flex; flex-direction: column; }
+.spk-row-wrap { border-bottom: 1px solid var(--border-default); }
+.spk-row-wrap.is-editing { background: var(--bg-surface); }
+.spk-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) 0;
+}
+.spk-row__main { flex: 1; min-width: 0; }
+.spk-row__name {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  display: flex; align-items: center; gap: var(--space-2);
+}
+.spk-row__tag {
+  font-size: var(--text-2xs);
+  color: var(--fg-subtle);
+  border: 1px solid var(--border-default);
+  border-radius: 999px;
+  padding: 0 6px;
+  font-weight: 400;
+}
+.spk-row__meta { font-size: var(--text-xs); color: var(--fg-subtle); margin-top: 1px; }
+
+/* 小圆形 ▶ 播放按钮（替代原生 audio controls，窄、统一、不溢出）*/
+.spk-play {
+  flex-shrink: 0;
+  width: 28px; height: 28px;
+  border-radius: 999px;
+  display: inline-grid; place-items: center;
+  border: 1px solid var(--border-default);
+  background: var(--bg-canvas);
+  color: var(--fg-default);
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+.spk-play:hover { background: var(--bg-panel); }
+
+.spk-editor {
+  margin: 0 0 var(--space-4);
+  background: var(--bg-panel);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  display: flex; flex-direction: column; gap: var(--space-4);
+}
+.spk-editor__section { display: flex; flex-direction: column; gap: var(--space-2); }
+.spk-editor__label { font-size: var(--text-xs); font-weight: var(--weight-medium); color: var(--fg-subtle); }
+.spk-editor__note { font-size: var(--text-2xs); color: var(--fg-subtle); }
+.spk-clips, .spk-samples { display: flex; flex-direction: column; gap: var(--space-2); margin: 0; padding: 0; list-style: none; }
+.spk-clip, .spk-sample { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
+.spk-clip__time { font-size: var(--text-2xs); color: var(--fg-subtle); flex-shrink: 0; font-variant-numeric: tabular-nums; }
+.spk-clip__text { font-size: var(--text-xs); color: var(--fg-default); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+.spk-fields { display: flex; gap: var(--space-3); flex-wrap: wrap; }
+.spk-field { display: flex; flex-direction: column; gap: 4px; flex: 1 1 220px; min-width: 0; }
+.spk-field > span { font-size: var(--text-2xs); color: var(--fg-subtle); }
+.spk-check { display: inline-flex; gap: var(--space-2); align-items: center; font-size: var(--text-sm); cursor: pointer; }
+.spk-editor__merge { border-top: 1px dashed var(--border-default); padding-top: var(--space-3); }
+.spk-merge-row { display: flex; gap: var(--space-2); align-items: center; }
+.spk-merge-row .field { flex: 1; min-width: 0; }
+/* sticky 操作条：编辑区再高，保存/取消也始终钉在底部，不会被裁 */
+.spk-editor__bar {
+  position: sticky;
+  bottom: 0;
+  display: flex; justify-content: flex-end; gap: var(--space-2);
+  margin: var(--space-1) calc(-1 * var(--space-4)) calc(-1 * var(--space-4));
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--border-default);
+  background: var(--bg-panel);
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
+}
+
 /* ---------- Card --------------------------------------------------------- */
 .card {
   background: var(--bg-surface);

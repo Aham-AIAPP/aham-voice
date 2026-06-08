@@ -27,7 +27,7 @@ export function Login() {
       } else if (user.role === "admin") {
         navigate(redirect && redirect !== "/login" ? redirect : "/admin/overview", { replace: true });
       } else {
-        navigate(redirect && redirect !== "/login" ? redirect : "/app/workspace", { replace: true });
+        navigate(redirect && redirect !== "/login" ? redirect : "/app/recordings/new", { replace: true });
       }
     } catch (err) {
       setError(readApiError(err));
@@ -42,6 +42,22 @@ export function Login() {
         登录到 <em>兰之天</em>
       </h1>
       <p className="auth-form__lede">使用公司账号继续。首次登录后会被引导设置新密码。</p>
+
+      <div
+        style={{
+          fontSize: "var(--text-xs)",
+          color: "var(--fg-subtle)",
+          background: "var(--bg-panel)",
+          border: "1px solid var(--border-default)",
+          borderRadius: "var(--radius-md)",
+          padding: "var(--space-3)",
+          marginBottom: "var(--space-4)",
+          lineHeight: 1.7,
+        }}
+      >
+        <div>用户名：姓名全拼小写（如 <code>lichengbao</code> / <code>zhutao</code>）</div>
+        <div>初始密码：<code>orchisky888888</code>（首次登录会要求改密）</div>
+      </div>
 
       <FormRow label="用户名 / 邮箱 / 手机号" htmlFor="login-username">
         <Field

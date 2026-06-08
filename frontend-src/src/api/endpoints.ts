@@ -177,7 +177,7 @@ export async function patchHotword(id: string, payload: Partial<Pick<Hotword, "k
   return data;
 }
 
-export async function syncHotwordSource(source: "all" | "crm" | "wecom-journals", preview: boolean): Promise<{ ok: boolean; results: unknown[]; status: HotwordStatus }> {
+export async function syncHotwordSource(source: "all" | "crm" | "wecom-journals", preview: boolean): Promise<{ ok: boolean; started: boolean; sources: string[]; preview: boolean; status: HotwordStatus }> {
   const { data } = await api.post("/hotwords/sync", { source, preview });
   return data;
 }

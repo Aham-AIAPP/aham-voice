@@ -29,8 +29,15 @@ export function Hotwords() {
   const [protectedOnly, setProtectedOnly] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
+  const [syncSource, setSyncSource] = useState<"all" | "crm" | "wecom-journals">("all");
 
-  const status = useQuery({ queryKey: ["hotwords-status"], queryFn: fetchHotwordStatus });
+  const status = useQuery({
+    queryKey: ["hotwords-status"],
+    queryFn: fetchHotwordStatus,
+    // 后台同步时每 4s 轮询，跑完自动停。
+    refetchInterval: (query) =>
+      (query.state.data?.recent_runs ?? []).some((r) => r.status === "running") ? 4000 : false,
+  });
   const rows = useQuery({
     queryKey: ["hotwords", state, q, protectedOnly],
     queryFn: () =>
@@ -54,12 +61,11 @@ export function Hotwords() {
   const sync = useMutation({
     mutationFn: (input: { source: "all" | "crm" | "wecom-journals"; preview: boolean }) =>
       syncHotwordSource(input.source, input.preview),
-    onSuccess: (data, vars) => {
-      const r = (data.results?.[0] ?? {}) as Record<string, unknown>;
+    onSuccess: (_data, vars) => {
+      const label = vars.source === "wecom-journals" ? "企微日报" : vars.source === "crm" ? "金蝶 CRM" : "全部来源";
       setInfo(
-        `${vars.source === "wecom-journals" ? "企微" : vars.source === "crm" ? "CRM" : "全部"}${vars.preview ? " · 预演" : ""}：新增 ${r.inserted ?? 0}，更新 ${r.updated ?? 0}，重激活 ${r.reactivated ?? 0}，过期 ${r.expired ?? 0}`,
+        `已在后台开始${vars.preview ? "预演" : "同步"}（${label}）。含云端抽词、耗时较长，完成后下方「同步状态」会自动更新，无需停在本页等待。`,
       );
-      qc.invalidateQueries({ queryKey: ["hotwords"] });
       qc.invalidateQueries({ queryKey: ["hotwords-status"] });
     },
     onError: (err) => setError(readApiError(err)),
@@ -75,6 +81,11 @@ export function Hotwords() {
     onError: (err) => setError(readApiError(err)),
   });
 
+  const recentRuns = status.data?.recent_runs ?? [];
+  const runningRun = recentRuns.find((r) => r.status === "running");
+  const isRunning = !!runningRun;
+  const lastRun = recentRuns.find((r) => r.status !== "running");
+
   return (
     <div className="page-body page--object-index">
       <PageHead
@@ -84,55 +95,74 @@ export function Hotwords() {
             ? `共 ${status.data.total} 条 · 启用 ${status.data.active} · 受保护 ${status.data.protected} · 已过期 ${status.data.expired}`
             : "加载中…"
         }
-        actions={
-          canSync ? (
-            <>
-              <Button
-                variant="ghost"
-                size="sm"
-                loading={maintain.isPending}
-                onClick={() => {
-                  setError(null);
-                  setInfo(null);
-                  maintain.mutate();
-                }}
-              >
-                重算评分
-              </Button>
-              <Button
-                variant="primary"
-                size="sm"
-                loading={sync.isPending}
-                onClick={() => {
-                  setError(null);
-                  setInfo(null);
-                  sync.mutate({ source: "all", preview: false });
-                }}
-              >
-                <Icon name="refresh-cw" size={14} /> 同步全部
-              </Button>
-            </>
-          ) : undefined
-        }
       />
 
       {error && <Diag code="HW_E_ACTION">{error}</Diag>}
       {info && <Diag code="HW_OK" tone="info">{info}</Diag>}
 
       {canSync && (
-        <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--space-2)", marginBottom: "var(--space-4)" }}>
-          <Button variant="ghost" size="sm" onClick={() => sync.mutate({ source: "crm", preview: true })} loading={sync.isPending}>
-            预演 · CRM
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            gap: "var(--space-2)",
+            alignItems: "center",
+            marginBottom: "var(--space-4)",
+            padding: "var(--space-3) var(--space-4)",
+            border: "1px solid var(--border-default)",
+            borderRadius: "var(--radius-md)",
+            background: "var(--bg-surface)",
+          }}
+        >
+          <span className="meta" style={{ fontSize: "var(--text-xs)" }}>同步来源</span>
+          <select
+            className="field"
+            style={{ width: 150, height: 32 }}
+            value={syncSource}
+            onChange={(e) => setSyncSource(e.target.value as "all" | "crm" | "wecom-journals")}
+            disabled={isRunning}
+          >
+            <option value="all">全部来源</option>
+            <option value="crm">金蝶 CRM</option>
+            <option value="wecom-journals">企微日报</option>
+          </select>
+          <Button
+            variant="ghost"
+            size="sm"
+            loading={sync.isPending}
+            disabled={isRunning}
+            onClick={() => { setError(null); setInfo(null); sync.mutate({ source: syncSource, preview: true }); }}
+          >
+            预演
           </Button>
-          <Button variant="ghost" size="sm" onClick={() => sync.mutate({ source: "crm", preview: false })} loading={sync.isPending}>
-            同步 · CRM
+          <Button
+            variant="primary"
+            size="sm"
+            loading={sync.isPending}
+            disabled={isRunning}
+            onClick={() => { setError(null); setInfo(null); sync.mutate({ source: syncSource, preview: false }); }}
+          >
+            <Icon name="refresh-cw" size={14} /> 同步
           </Button>
-          <Button variant="ghost" size="sm" onClick={() => sync.mutate({ source: "wecom-journals", preview: true })} loading={sync.isPending}>
-            预演 · 企微日报
+          <Button
+            variant="ghost"
+            size="sm"
+            loading={maintain.isPending}
+            disabled={isRunning}
+            onClick={() => { setError(null); setInfo(null); maintain.mutate(); }}
+          >
+            重算评分
           </Button>
-          <Button variant="ghost" size="sm" onClick={() => sync.mutate({ source: "wecom-journals", preview: false })} loading={sync.isPending}>
-            同步 · 企微日报
-          </Button>
+          <div style={{ marginLeft: "auto" }}>
+            {isRunning ? (
+              <Status tone="accent">同步进行中…{runningRun?.source_name ? `（${runningRun.source_name}）` : ""}</Status>
+            ) : lastRun ? (
+              <span className="meta" style={{ fontSize: "var(--text-xs)" }}>
+                上次：{lastRun.source_name} · 新增 {lastRun.inserted} 更新 {lastRun.updated}
+                {lastRun.status === "failed" ? " · 失败" : ""} · {formatRelative(lastRun.started_at)}
+              </span>
+            ) : null}
+          </div>
         </div>
       )}
 

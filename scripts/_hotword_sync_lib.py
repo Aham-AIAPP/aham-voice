@@ -232,7 +232,7 @@ def derive_short_names_llm(names: list[str], *, max_batch: int = 100) -> dict[st
     if not api_key or not uniq:
         return {}
     out: dict[str, list[str]] = {}
-    with httpx.Client(timeout=120) as client:
+    with httpx.Client(timeout=120, trust_env=False) as client:
         for i in range(0, len(uniq), max_batch):
             batch = uniq[i:i + max_batch]
             log(f"DeepSeek 简称抽取 {i + 1}-{i + len(batch)}/{len(uniq)}")
@@ -300,7 +300,7 @@ def call_deepseek_extract(
     if not chunks:
         return []
     candidates: dict[str, dict[str, Any]] = {}
-    with httpx.Client(timeout=180) as client:
+    with httpx.Client(timeout=180, trust_env=False) as client:
         for index, chunk in enumerate(chunks, 1):
             log(f"DeepSeek 抽取 chunk {index}/{len(chunks)} ({len(chunk)} 字)")
             try:

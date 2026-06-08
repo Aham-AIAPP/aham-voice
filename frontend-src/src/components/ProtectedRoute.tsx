@@ -30,7 +30,7 @@ export function ProtectedRoute({
   if (roles && !roles.includes(user.role)) {
     // The user is logged in but not authorized for THIS path. Send them home
     // based on their role rather than dropping them to login.
-    return <Navigate to={user.role === "admin" ? "/admin/overview" : "/app/workspace"} replace />;
+    return <Navigate to={user.role === "admin" ? "/admin/overview" : "/app/recordings/new"} replace />;
   }
   return <>{children}</>;
 }

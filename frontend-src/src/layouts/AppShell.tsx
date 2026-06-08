@@ -11,6 +11,7 @@ interface NavItemDef {
   label: string;
   count?: number | string;
   badge?: string;
+  end?: boolean;
 }
 
 interface NavSectionDef {
@@ -23,8 +24,8 @@ function memberSections(): NavSectionDef[] {
     {
       title: "AI 工作台",
       items: [
-        { to: "/app/workspace", icon: "house", label: "起点", count: "—" },
-        { to: "/app/recordings", icon: "audio-lines", label: "录音库" },
+        { to: "/app/recordings/new", icon: "house", label: "首页" },
+        { to: "/app/recordings", icon: "audio-lines", label: "录音库", end: true },
         { to: "/app/tasks", icon: "list-checks", label: "任务进度" },
       ],
     },
@@ -82,7 +83,6 @@ function buildBreadcrumb(pathname: string): { href?: string; label: string }[] {
   const labelMap: Record<string, string> = {
     app: "工作台",
     admin: "管理控制台",
-    workspace: "起点",
     recordings: "录音库",
     new: "上传录音",
     tasks: "任务进度",
@@ -170,6 +170,7 @@ export function AppShell() {
                 <NavLink
                   key={item.to}
                   to={item.to}
+                  end={item.end}
                   className={({ isActive }) =>
                     cn("nav-item", isActive && "is-active")
                   }

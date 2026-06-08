@@ -4,7 +4,6 @@ import { AppShell } from "@/layouts/AppShell";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { Login } from "@/pages/auth/Login";
 import { ChangePassword } from "@/pages/auth/ChangePassword";
-import { Workspace } from "@/pages/app/Workspace";
 import { RecordingsList } from "@/pages/app/RecordingsList";
 import { RecordingNew } from "@/pages/app/RecordingNew";
 import { RecordingDetail } from "@/pages/app/RecordingDetail";
@@ -26,7 +25,7 @@ import { NotFound } from "@/pages/NotFound";
 export const router = createBrowserRouter([
   {
     path: "/",
-    element: <Navigate to="/app/workspace" replace />,
+    element: <Navigate to="/app/recordings/new" replace />,
   },
   {
     path: "/login",
@@ -55,8 +54,8 @@ export const router = createBrowserRouter([
       </ProtectedRoute>
     ),
     children: [
-      { index: true, element: <Navigate to="/app/workspace" replace /> },
-      { path: "workspace", element: <Workspace /> },
+      { index: true, element: <Navigate to="/app/recordings/new" replace /> },
+      { path: "workspace", element: <Navigate to="/app/recordings/new" replace /> },
       { path: "recordings", element: <RecordingsList /> },
       { path: "recordings/new", element: <RecordingNew /> },
       { path: "recordings/:id", element: <RecordingDetail /> },
