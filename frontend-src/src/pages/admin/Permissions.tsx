@@ -14,6 +14,7 @@ import { Diag } from "@/components/Diag";
 import { EmptyState } from "@/components/EmptyState";
 import { Field, FormRow } from "@/components/Field";
 import { readApiError } from "@/api/client";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import type { RoleMapping } from "@/api/types";
 
 const MATCH_TYPES: { value: RoleMapping["match_type"]; label: string }[] = [
@@ -52,6 +53,7 @@ export function AdminPermissions() {
   const [showNew, setShowNew] = useState(false);
   const [draft, setDraft] = useState<DraftMapping>(EMPTY_DRAFT);
   const [error, setError] = useState<string | null>(null);
+  const [pendingDel, setPendingDel] = useState<RoleMapping | null>(null);
 
   const create = useMutation({
     mutationFn: () =>
@@ -99,8 +101,8 @@ export function AdminPermissions() {
       {error && <Diag code="PERM_E_ACTION">{error}</Diag>}
 
       {showNew && (
-        <div className="card" style={{ padding: "var(--space-5)", marginBottom: "var(--space-4)", display: "flex", flexDirection: "column", gap: "var(--space-3)" }}>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "var(--space-3)" }}>
+        <div className="card u-p-5 u-mb-4 u-flex u-col u-gap-3">
+          <div className="u-grid u-gap-3 pm-autofit-grid">
             <FormRow label="匹配方式">
               <select className="field" value={draft.match_type} onChange={(e) => setDraft({ ...draft, match_type: e.target.value as RoleMapping["match_type"] })}>
                 {MATCH_TYPES.map((m) => (
@@ -124,9 +126,9 @@ export function AdminPermissions() {
           </div>
           {draft.role === "manager" && (
             <FormRow label="管理团队">
-              <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--space-2)" }}>
+              <div className="u-cluster-wrap">
                 {(teams.data ?? []).map((t) => (
-                  <label key={t.id} style={{ display: "inline-flex", gap: "var(--space-1)", alignItems: "center", padding: "var(--space-1) var(--space-2)", border: "1px solid var(--border-default)", borderRadius: "var(--radius-md)" }}>
+                  <label key={t.id} className="u-iflex u-gap-1 u-items-center u-pad-1-2 pm-chip">
                     <input
                       type="checkbox"
                       checked={draft.managed_team_ids.includes(t.id)}
@@ -145,7 +147,7 @@ export function AdminPermissions() {
               </div>
             </FormRow>
           )}
-          <div style={{ display: "flex", justifyContent: "flex-end", gap: "var(--space-2)" }}>
+          <div className="u-row-end">
             <Button variant="ghost" onClick={() => setShowNew(false)}>取消</Button>
             <Button variant="primary" loading={create.isPending} disabled={!draft.match_value.trim()} onClick={() => create.mutate()}>
               保存映射
@@ -180,7 +182,7 @@ export function AdminPermissions() {
                 <td>
                   <Status tone={m.active ? "moss" : "muted"}>{m.active ? "启用" : "停用"}</Status>
                 </td>
-                <td style={{ display: "flex", gap: "var(--space-2)" }}>
+                <td className="u-row">
                   <Button variant="ghost" size="sm" onClick={() => update.mutate({ id: m.id, payload: { active: !m.active } })}>
                     {m.active ? "停用" : "启用"}
                   </Button>
@@ -188,7 +190,7 @@ export function AdminPermissions() {
                     variant="ghost"
                     size="sm"
                     onClick={() => {
-                      if (window.confirm(`删除映射「${m.match_value} → ${m.role}」？`)) remove.mutate(m.id);
+                      setPendingDel(m);
                     }}
                   >
                     删除
@@ -199,6 +201,15 @@ export function AdminPermissions() {
           </tbody>
         </table>
       )}
+      <ConfirmDialog
+        open={!!pendingDel}
+        tone="danger"
+        title="删除角色映射"
+        body={pendingDel ? `删除映射「${pendingDel.match_value} → ${pendingDel.role}」？该操作不可撤销。` : ""}
+        confirmText="删除"
+        onCancel={() => setPendingDel(null)}
+        onConfirm={() => { if (pendingDel) remove.mutate(pendingDel.id); setPendingDel(null); }}
+      />
     </div>
   );
 }

@@ -40,18 +40,6 @@
   --color-info:       var(--info-fg);
   --color-info-bg:    var(--info-bg);
 
-  /* Brand scales (utility access to raw scales) */
-  --color-clay-50:   var(--clay-50);
-  --color-clay-100:  var(--clay-100);
-  --color-clay-200:  var(--clay-200);
-  --color-clay-300:  var(--clay-300);
-  --color-clay-400:  var(--clay-400);
-  --color-clay-500:  var(--clay-500);
-  --color-clay-600:  var(--clay-600);
-  --color-clay-700:  var(--clay-700);
-  --color-clay-800:  var(--clay-800);
-  --color-clay-900:  var(--clay-900);
-
   --color-paper-50:  var(--paper-50);
   --color-paper-100: var(--paper-100);
   --color-paper-200: var(--paper-200);
@@ -66,7 +54,6 @@
 
   /* ---------- Typography ---------- */
   --font-sans:  var(--font-sans);
-  --font-serif: var(--font-serif);
   --font-mono:  var(--font-mono);
 
   --text-2xs:  var(--text-2xs);

@@ -24,9 +24,8 @@ function memberSections(): NavSectionDef[] {
     {
       title: "AI 工作台",
       items: [
-        { to: "/app/recordings/new", icon: "house", label: "首页" },
+        { to: "/app/recordings/new", icon: "plus", label: "新增" },
         { to: "/app/recordings", icon: "audio-lines", label: "录音库", end: true },
-        { to: "/app/tasks", icon: "list-checks", label: "任务进度" },
       ],
     },
     {
@@ -57,8 +56,7 @@ function adminSections(): NavSectionDef[] {
     {
       title: "数据与样本",
       items: [
-        { to: "/admin/hotword", icon: "spell-check", label: "热词总览" },
-        { to: "/admin/hotword-sources", icon: "database", label: "热词来源" },
+        { to: "/admin/hotword", icon: "spell-check", label: "热词" },
         { to: "/admin/voiceprints", icon: "mic", label: "声纹库" },
       ],
     },
@@ -66,12 +64,7 @@ function adminSections(): NavSectionDef[] {
       title: "运维与审计",
       items: [
         { to: "/admin/audit", icon: "activity", label: "审计日志" },
-        { to: "/admin/asr", icon: "cpu", label: "ASR 配置" },
-        { to: "/admin/llm", icon: "brain", label: "大模型" },
-        { to: "/admin/storage", icon: "hard-drive", label: "存储" },
-        { to: "/admin/storage-queue", icon: "files", label: "队列" },
-        { to: "/admin/export", icon: "file-down", label: "导出" },
-        { to: "/admin/export-templates", icon: "file-text", label: "导出模板" },
+        { to: "/admin/llm", icon: "sliders-horizontal", label: "系统配置" },
       ],
     },
   ];
@@ -85,7 +78,6 @@ function buildBreadcrumb(pathname: string): { href?: string; label: string }[] {
     admin: "管理控制台",
     recordings: "录音库",
     new: "上传录音",
-    tasks: "任务进度",
     hotwords: "热词",
     voiceprints: "声纹",
     overview: "总览",
@@ -93,15 +85,9 @@ function buildBreadcrumb(pathname: string): { href?: string; label: string }[] {
     teams: "团队",
     permissions: "角色映射",
     wecom: "企业微信",
-    hotword: "热词总览",
-    "hotword-sources": "热词来源",
+    hotword: "热词",
     audit: "审计日志",
-    asr: "ASR 配置",
-    llm: "大模型",
-    storage: "存储",
-    "storage-queue": "队列",
-    export: "导出",
-    "export-templates": "导出模板",
+    llm: "系统配置",
   };
   // UUID-looking segments are record IDs — replace with a friendly tail label
   // based on the preceding segment (e.g. /recordings/<uuid> → "录音详情").
@@ -157,9 +143,9 @@ export function AppShell() {
 
       <aside className="app-shell__sidebar">
         <div className="app-shell__brand">
-          <span className="app-shell__brand-glyph">A</span>
+          <span className="app-shell__brand-glyph">O</span>
           <span>
-            兰之天 <em>AI · 录音转写</em>
+            Orchisky <em>Voice</em>
           </span>
         </div>
         <nav className="app-shell__sidebar-nav" aria-label="主导航">
@@ -204,19 +190,7 @@ export function AppShell() {
           {accountOpen && (
             <div
               role="menu"
-              className="menu"
-              style={{
-                position: "absolute",
-                bottom: "calc(var(--shell-account-h) + var(--space-2))",
-                left: "var(--space-3)",
-                right: "var(--space-3)",
-                background: "var(--bg-elevated)",
-                border: "1px solid var(--border-default)",
-                borderRadius: "var(--radius-md)",
-                boxShadow: "var(--shadow-lg)",
-                padding: "var(--space-1)",
-                zIndex: "var(--z-popover)",
-              }}
+              className="menu shell-account-menu"
             >
               <button
                 type="button"
@@ -250,15 +224,10 @@ export function AppShell() {
           ))}
         </nav>
         <div className="app-shell__topbar-utils">
-          <button type="button" aria-label="搜索">
-            <Icon name="search" size={16} />
-          </button>
-          <button type="button" aria-label="通知">
-            <Icon name="bell" size={16} />
-          </button>
           <button
             type="button"
-            aria-label="主题"
+            aria-label="切换深色 / 浅色主题"
+            title="切换深色 / 浅色主题"
             onClick={() => document.documentElement.classList.toggle("dark")}
           >
             <Icon name="sun" size={16} />

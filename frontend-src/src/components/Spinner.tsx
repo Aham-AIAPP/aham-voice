@@ -6,16 +6,8 @@ export function Spinner({ size = 14 }: { size?: number }) {
     <span
       role="status"
       aria-live="polite"
-      style={{
-        display: "inline-block",
-        width: size,
-        height: size,
-        border: "1.5px solid currentColor",
-        borderTopColor: "transparent",
-        borderRadius: "50%",
-        animation: "newvoice-spin 700ms linear infinite",
-        verticalAlign: "middle",
-      }}
+      className="nv-spinner"
+      style={{ width: size, height: size }}
     />
   );
 }

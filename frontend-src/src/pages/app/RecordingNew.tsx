@@ -83,13 +83,13 @@ export function RecordingNew() {
   }
 
   return (
-    <div className="page-body page--object-index" style={{ maxWidth: "var(--container-page-narrow)" }}>
+    <div className="page-body page--object-index rn-page-narrow">
       <PageHead
         title="上传录音"
         subtitle="文件大小最多 2GB。上传完成后默认自动转写并生成纪要。"
       />
 
-      <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: "var(--space-6)" }}>
+      <form onSubmit={handleSubmit} className="u-flex u-col u-gap-6">
         <label
           className={cn("upload-zone", dragOver && "is-active", file && "has-file")}
           onDragOver={(e) => {
@@ -104,7 +104,7 @@ export function RecordingNew() {
             type="file"
             accept={ACCEPTED}
             onChange={onPickInput}
-            style={{ position: "absolute", left: -9999, width: 1, height: 1 }}
+            className="rn-hidden-input"
           />
           <div className="upload-zone__drop">
             {file ? (
@@ -162,19 +162,18 @@ export function RecordingNew() {
         <FormRow label="预计说话人数" optional htmlFor="rec-spk" hint="填了能让说话人分离更准、避免一个人被拆成好几个。不确定就留空（自动判断）。">
           <input
             id="rec-spk"
-            className="field"
+            className="field rn-maxw-160"
             type="number"
             min={2}
             max={50}
             value={expectedSpeakers}
             onChange={(e) => setExpectedSpeakers(e.target.value)}
             placeholder="如：7"
-            style={{ maxWidth: 160 }}
           />
         </FormRow>
 
         <FormRow label="自动处理" hint="上传后自动转写并调用 DeepSeek 生成纪要。关闭后可手动触发。">
-          <label style={{ display: "inline-flex", gap: "var(--space-2)", alignItems: "center", cursor: "pointer" }}>
+          <label className="u-iflex u-gap-2 u-items-center u-pointer">
             <input
               type="checkbox"
               checked={autoProcess}
@@ -187,8 +186,8 @@ export function RecordingNew() {
         {error && <Diag code="REC_E_UPLOAD">{error}</Diag>}
 
         {mutation.isPending && uploadPct !== null && (
-          <div className="card" style={{ display: "flex", flexDirection: "column", gap: "var(--space-2)" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: "var(--text-sm)" }}>
+          <div className="card u-flex u-col u-gap-2">
+            <div className="u-flex u-between u-fs-sm">
               <span>{uploadPct < 100 ? "正在上传…" : "上传完成，正在准备处理…"}</span>
               <span className="meta">{uploadPct}%</span>
             </div>
@@ -198,7 +197,7 @@ export function RecordingNew() {
           </div>
         )}
 
-        <div style={{ display: "flex", gap: "var(--space-3)", justifyContent: "flex-end" }}>
+        <div className="u-flex u-gap-3 u-justify-end">
           <Button variant="ghost" onClick={() => navigate("/app/recordings")} type="button" disabled={mutation.isPending}>
             取消
           </Button>

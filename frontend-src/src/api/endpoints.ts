@@ -2,14 +2,14 @@ import { api, getStoredToken } from "./client";
 import type {
   AdminOverview,
   AuditRow,
-  Hotword,
-  HotwordStatus,
+  LlmTestResult,
   LoginResponse,
+  NameSpeakerResult,
   OpportunityCandidate,
   Recording,
   RecordingDetail,
-  RecordingTask,
   RoleMapping,
+  Settings,
   SpeakerCandidate,
   SystemStatus,
   Team,
@@ -136,11 +136,6 @@ export async function fetchSpeakerCandidates(id: string): Promise<SpeakerCandida
   return data;
 }
 
-export async function mergeSpeakers(recordingId: string, from: string, into: string): Promise<{ moved_segments: number; into: string }> {
-  const { data } = await api.post(`/recordings/${recordingId}/speakers/merge`, { from, into });
-  return data;
-}
-
 export async function renameSpeaker(recordingId: string, speaker: string, payload: {
   name: string;
   voiceprint_id?: string;
@@ -149,41 +144,45 @@ export async function renameSpeaker(recordingId: string, speaker: string, payloa
   return data;
 }
 
-// -------- tasks --------
+// -------- hotwords（仅保留个人手填热词；表格版/在线更新已移除）--------
 
-export async function fetchTasks(): Promise<RecordingTask[]> {
-  const { data } = await api.get<RecordingTask[]>("/tasks");
+// 个人热词（对齐 aham-voice 富文本框）：读/写当前用户全部个人热词，无损 round-trip。
+// 注：热词「在线更新」（CRM/企微同步、重算评分、同步状态）功能已整体移除。
+export async function fetchAllHotwordWords(): Promise<string[]> {
+  const { data } = await api.get<string[]>("/hotwords/words");
   return data;
 }
 
-// -------- hotwords --------
-
-export async function fetchHotwords(params: {
-  state?: string;
-  q?: string;
-  protected?: "0" | "1";
-}): Promise<Hotword[]> {
-  const { data } = await api.get<Hotword[]>("/hotwords", { params });
+export async function saveAllHotwords(words: string[]): Promise<{ ok: boolean; count: number; words: string[] }> {
+  const { data } = await api.put("/hotwords", { words });
   return data;
 }
 
-export async function fetchHotwordStatus(): Promise<HotwordStatus> {
-  const { data } = await api.get<HotwordStatus>("/hotwords/status");
+// -------- settings (大模型配置) --------
+
+export async function fetchSettings(): Promise<Settings> {
+  const { data } = await api.get<Settings>("/settings");
   return data;
 }
 
-export async function patchHotword(id: string, payload: Partial<Pick<Hotword, "kind" | "aliases" | "scope" | "weight" | "active" | "state" | "protected">>): Promise<Hotword> {
-  const { data } = await api.patch<Hotword>(`/hotwords/${id}`, payload);
+export async function patchSettings(payload: {
+  llm_api_key?: string;
+  llm_api_base?: string;
+  llm_model?: string;
+  llm_provider?: string;
+  newcrm_base_url?: string;
+  newcrm_token?: string;
+}): Promise<Settings> {
+  const { data } = await api.patch<Settings>("/settings", payload);
   return data;
 }
 
-export async function syncHotwordSource(source: "all" | "crm" | "wecom-journals", preview: boolean): Promise<{ ok: boolean; started: boolean; sources: string[]; preview: boolean; status: HotwordStatus }> {
-  const { data } = await api.post("/hotwords/sync", { source, preview });
-  return data;
-}
-
-export async function maintainHotwords(): Promise<{ expired: number; rescored: number; status: HotwordStatus }> {
-  const { data } = await api.post("/hotwords/maintain");
+export async function testLlmConnection(payload: {
+  api_key?: string;
+  api_base?: string;
+  model?: string;
+}): Promise<LlmTestResult> {
+  const { data } = await api.post<LlmTestResult>("/settings/test", payload);
   return data;
 }
 
@@ -194,46 +193,28 @@ export async function fetchVoiceprints(): Promise<Voiceprint[]> {
   return data;
 }
 
-export async function createVoiceprint(input: {
-  name: string;
-  threshold?: number;
-  scope?: "personal" | "team" | "global";
-  team_id?: string;
-  file: File;
-}): Promise<Voiceprint> {
-  const form = new FormData();
-  form.append("name", input.name);
-  if (input.threshold != null) form.append("threshold", String(input.threshold));
-  if (input.scope) form.append("scope", input.scope);
-  if (input.team_id) form.append("team_id", input.team_id);
-  form.append("file", input.file);
-  const { data } = await api.post<Voiceprint>("/voiceprints", form);
-  return data;
-}
-
-export async function createVoiceprintFromRecording(payload: {
+// 录音详情页「点名字直接命名」的薄封装（对齐 aham-voice）：只传姓名，一步完成
+// 回填当前录音 + 建跨录音声纹；发言 <5s 时后端降级为仅命名（downgraded=true）。
+export async function nameSpeakerFromRecording(payload: {
   recording_id: string;
   speaker: string;
-  name?: string;
-  segment_ids?: string[];
-  profile_id?: string;
+  name: string;
   update_current_recording?: boolean;
-  threshold?: number;
-  scope?: "personal" | "team" | "global";
-  team_id?: string;
-}): Promise<{
-  profile: Voiceprint;
-  sample_count: number;
-  sample_duration: number;
-  sample_duration_label: string;
-  updated_segments: number;
-}> {
-  const { data } = await api.post("/voiceprints/from-recording", payload);
+}): Promise<NameSpeakerResult> {
+  const { data } = await api.post<NameSpeakerResult>("/voiceprints/from-recording", {
+    update_current_recording: true,
+    ...payload,
+  });
   return data;
 }
 
-export async function patchVoiceprint(id: string, payload: Partial<Pick<Voiceprint, "name" | "threshold" | "active">>): Promise<Voiceprint> {
+export async function patchVoiceprint(id: string, payload: Partial<Pick<Voiceprint, "name" | "note" | "threshold" | "active">>): Promise<Voiceprint> {
   const { data } = await api.patch<Voiceprint>(`/voiceprints/${id}`, payload);
+  return data;
+}
+
+export async function deleteVoiceprint(id: string): Promise<{ ok: boolean; id: string }> {
+  const { data } = await api.delete(`/voiceprints/${id}`);
   return data;
 }
 

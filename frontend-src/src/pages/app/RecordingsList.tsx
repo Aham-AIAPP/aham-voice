@@ -7,6 +7,7 @@ import { Button } from "@/components/Button";
 import { Status } from "@/components/Status";
 import { Icon } from "@/components/Icon";
 import { EmptyState } from "@/components/EmptyState";
+import { PageLoading } from "@/components/PageLoading";
 import { Diag } from "@/components/Diag";
 import { useAuth } from "@/context/auth";
 import { readApiError } from "@/api/client";
@@ -113,7 +114,9 @@ export function RecordingsList() {
         <Diag code="REC_E_LIST">{readApiError(query.error)}</Diag>
       )}
 
-      {!query.isError && filtered.length === 0 && !query.isLoading ? (
+      {!query.isError && query.isLoading && <PageLoading />}
+
+      {!query.isError && !query.isLoading && (filtered.length === 0 ? (
         <EmptyState
           description={
             q || meetingType !== "全部"
@@ -169,7 +172,7 @@ export function RecordingsList() {
                           ? "未配置"
                           : "—";
                 return (
-                  <tr key={rec.id} onClick={() => navigate(`/app/recordings/${rec.id}`)} style={{ cursor: "pointer" }}>
+                  <tr key={rec.id} onClick={() => navigate(`/app/recordings/${rec.id}`)} className="u-pointer">
                     <td>
                       <div className="cell-stack">
                         <span className="primary">{rec.title}</span>
@@ -183,7 +186,7 @@ export function RecordingsList() {
                     <td>
                       <Status tone={overall.tone}>{overall.label}</Status>
                       {rec.asr_status === "done" && rec.summary_status === "running" && (
-                        <span className="meta" style={{ display: "block", fontSize: "var(--text-xs)" }}>
+                        <span className="meta u-block u-fs-xs">
                           纪要 {statusLabel(rec.summary_status)}
                         </span>
                       )}
@@ -214,7 +217,7 @@ export function RecordingsList() {
             <span className="count">共 {filtered.length} 条</span>
           </div>
         </>
-      )}
+      ))}
     </div>
   );
 }

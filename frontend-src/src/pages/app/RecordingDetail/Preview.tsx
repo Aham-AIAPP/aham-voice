@@ -82,8 +82,7 @@ export function Preview({ recordingId, summaries, segments, emotion, selected, o
 
   return (
     <div
-      className="preview-window"
-      style={{ height: "100%", borderRadius: 0, border: 0, boxShadow: "none" }}
+      className="preview-window pv-window-flush"
     >
       <header className="preview-header">
         <span className="preview-type">MD</span>
@@ -92,8 +91,7 @@ export function Preview({ recordingId, summaries, segments, emotion, selected, o
         <div className="preview-actions">
           {summaries.length + (segments.length > 0 ? 1 : 0) + (emotion ? 1 : 0) > 1 && (
             <select
-              className="field"
-              style={{ width: 168, height: 28, fontSize: "var(--text-xs)" }}
+              className="field u-fs-xs pv-artifact-select"
               value={selected}
               onChange={(e) => onSelect(e.target.value)}
               aria-label="切换产物"

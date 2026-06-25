@@ -84,7 +84,7 @@ export function AdminAudit() {
           <tbody>
             {rows.data.map((row) => (
               <tr key={row.id}>
-                <td className="meta" style={{ fontFamily: "var(--font-mono)" }}>{row.created_at}</td>
+                <td className="meta u-mono">{row.created_at}</td>
                 <td className="cat">{row.category}</td>
                 <td className="meta">{row.actor_name}</td>
                 <td>{row.message}</td>

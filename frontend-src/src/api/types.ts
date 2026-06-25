@@ -160,59 +160,11 @@ export interface Hotword {
   updated_at: string | null;
 }
 
-export interface HotwordSource {
-  id: string;
-  name: string;
-  source_type: string;
-  enabled: number;
-  schedule_minutes: number;
-  lookback_days: number;
-  asr_limit: number;
-  correction_limit: number;
-  candidate_limit: number;
-  last_success_at: string | null;
-  last_error: string | null;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface HotwordSyncRun {
-  id: string;
-  source_name: string;
-  mode: string;
-  status: string;
-  started_at: string;
-  finished_at: string | null;
-  inserted: number;
-  updated: number;
-  reactivated: number;
-  expired: number;
-  skipped: number;
-  total: number;
-  report_path: string | null;
-  error: string | null;
-}
-
-export interface HotwordStatus {
-  total: number;
-  active: number;
-  protected: number;
-  dynamic: number;
-  expired: number;
-  limits: { asr: number; correction: number; protected: number };
-  by_source: Array<{
-    source: string;
-    total: number;
-    active: number;
-    protected: number;
-  }>;
-  sources: HotwordSource[];
-  recent_runs: HotwordSyncRun[];
-}
 
 export interface Voiceprint {
   id: string;
   name: string;
+  note?: string | null;
   owner_id: string | null;
   team_id: string | null;
   scope: "personal" | "team" | "global";
@@ -220,6 +172,37 @@ export interface Voiceprint {
   active: number;
   created_at: string;
   sample_path?: string;
+}
+
+// 大模型（LLM）配置 —— 对齐 aham-voice 开源版。API Key 永不回显。
+export interface Settings {
+  llm_configured: boolean;
+  llm_api_base: string;
+  llm_model: string;
+  llm_provider: string;
+  // legacy DeepSeek 别名（后端同步返回，兼容旧缓存）
+  deepseek_configured?: boolean;
+  deepseek_api_base?: string;
+  deepseek_model?: string;
+  // Orchisky CRM 同步（纪要回写、关联项目）。token 不回显。
+  crm_base_url?: string;
+  crm_configured?: boolean;
+}
+
+export interface LlmTestResult {
+  ok: boolean;
+  model: string;
+  latency_ms: number;
+  error?: string;
+}
+
+// 录音详情页给说话人命名并建声纹的结果。能建声纹的说话人命名后即返回新建的 profile。
+export interface NameSpeakerResult {
+  profile: Voiceprint;
+  sample_count: number;
+  sample_duration: number;
+  sample_duration_label: string;
+  updated_segments: number;
 }
 
 export interface SpeakerSampleSegment {
@@ -340,6 +323,8 @@ export interface CrmSync {
   minute_id: string | null;
   recording_url: string | null;
   minute_url: string | null;
+  emotion_id: string | null;
+  emotion_url: string | null;
   relation_status: string | null;
   relation_source: string | null;
   relation_confidence: number | null;

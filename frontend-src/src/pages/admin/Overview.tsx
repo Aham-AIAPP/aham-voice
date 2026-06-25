@@ -29,7 +29,7 @@ export function AdminOverview() {
         subtitle={`${data.active_users} 名启用用户 · ${data.team_count} 个团队 · 今日处理 ${data.today_processed_label} 录音 · 占用 ${data.storage_label}`}
       />
 
-      <section style={{ marginTop: "var(--space-4)", display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "var(--space-4)" }}>
+      <section className="u-card-grid u-mt-4">
         <article className="metric">
           <span className="metric__label">启用用户</span>
           <span className="metric__value">{data.active_users}</span>
@@ -49,14 +49,14 @@ export function AdminOverview() {
         </article>
       </section>
 
-      <section style={{ marginTop: "var(--space-8)" }}>
+      <section className="u-mt-8">
         <h2 className="form-section__title">外部能力</h2>
         <ul className="item-list">
           {data.integrations.map((it) => (
-            <li key={it.name} style={{ padding: "var(--space-3) 0", borderBottom: "1px solid var(--border-default)", display: "flex", gap: "var(--space-3)", alignItems: "center" }}>
-              <div style={{ flex: 1 }}>
-                <p style={{ fontWeight: 500 }}>{it.name}</p>
-                <p className="meta" style={{ fontSize: "var(--text-xs)" }}>{it.description}</p>
+            <li key={it.name} className="u-pad-row-3 u-bb u-flex u-gap-3 u-items-center">
+              <div className="u-flex-1">
+                <p className="u-fw-500">{it.name}</p>
+                <p className="meta u-fs-xs">{it.description}</p>
               </div>
               <Status tone={it.ok ? "moss" : "rust"}>{it.ok ? "可用" : "未就绪"}</Status>
             </li>
@@ -65,25 +65,25 @@ export function AdminOverview() {
       </section>
 
       {sys && (
-        <section style={{ marginTop: "var(--space-8)" }}>
+        <section className="u-mt-8">
           <h2 className="form-section__title">系统</h2>
           <ul className="item-list">
-            <li style={{ padding: "var(--space-2) 0", borderBottom: "1px solid var(--border-default)" }}>
-              <span style={{ marginRight: "var(--space-3)" }}>数据目录</span>
-              <span className="meta" style={{ fontFamily: "var(--font-mono)" }}>{sys.base}</span>
+            <li className="u-pad-row-2 u-bb">
+              <span className="u-mr-3">数据目录</span>
+              <span className="meta u-mono">{sys.base}</span>
             </li>
-            <li style={{ padding: "var(--space-2) 0", borderBottom: "1px solid var(--border-default)" }}>
-              <span style={{ marginRight: "var(--space-3)" }}>SQLite</span>
-              <span className="meta" style={{ fontFamily: "var(--font-mono)" }}>{sys.db}</span>
+            <li className="u-pad-row-2 u-bb">
+              <span className="u-mr-3">SQLite</span>
+              <span className="meta u-mono">{sys.db}</span>
             </li>
-            <li style={{ padding: "var(--space-2) 0", borderBottom: "1px solid var(--border-default)" }}>
-              <span style={{ marginRight: "var(--space-3)" }}>DeepSeek</span>
+            <li className="u-pad-row-2 u-bb">
+              <span className="u-mr-3">DeepSeek</span>
               <span className="meta">
                 {sys.deepseek_configured ? `已配置 · ${sys.deepseek_model}` : "未配置 API key"}
               </span>
             </li>
-            <li style={{ padding: "var(--space-2) 0", borderBottom: "1px solid var(--border-default)" }}>
-              <span style={{ marginRight: "var(--space-3)" }}>ASR 模型</span>
+            <li className="u-pad-row-2 u-bb">
+              <span className="u-mr-3">ASR 模型</span>
               <span className="meta">
                 Paraformer {sys.paraformer ? "✓" : "✗"} · VAD {sys.vad ? "✓" : "✗"} · Punc {sys.punc ? "✓" : "✗"} · CAM++ {sys.voiceprint ? "✓" : "✗"} · ffmpeg {sys.ffmpeg ? "✓" : "✗"}
               </span>
@@ -92,17 +92,17 @@ export function AdminOverview() {
         </section>
       )}
 
-      <section style={{ marginTop: "var(--space-8)" }}>
+      <section className="u-mt-8">
         <h2 className="form-section__title">最近审计</h2>
         <ul className="item-list">
-          {data.recent_audit.length === 0 && <li className="meta" style={{ padding: "var(--space-2) 0" }}>暂无</li>}
+          {data.recent_audit.length === 0 && <li className="meta u-pad-row-2">暂无</li>}
           {data.recent_audit.map((row) => (
-            <li key={row.id} style={{ padding: "var(--space-2) 0", borderBottom: "1px solid var(--border-default)", display: "flex", gap: "var(--space-3)" }}>
-              <span style={{ fontFamily: "var(--font-mono)", fontSize: "var(--text-xs)", color: "var(--fg-subtle)", minWidth: 120 }}>
+            <li key={row.id} className="u-pad-row-2 u-bb u-flex u-gap-3">
+              <span className="u-mono u-fs-xs u-fg-subtle ov-audit-cat">
                 {row.category}
               </span>
-              <span style={{ flex: 1 }}>{row.message}</span>
-              <span className="meta" style={{ fontSize: "var(--text-xs)" }}>
+              <span className="u-flex-1">{row.message}</span>
+              <span className="meta u-fs-xs">
                 {row.actor_name} · {formatRelative(row.created_at)}
               </span>
             </li>

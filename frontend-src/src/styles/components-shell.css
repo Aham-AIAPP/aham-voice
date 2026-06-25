@@ -92,14 +92,14 @@ select:focus-visible {
   color: var(--accent-fg);
   display: grid;
   place-items: center;
-  font-family: var(--font-serif);
-  font-style: italic;
+  font-family: var(--font-sans);
+  font-style: normal;
   font-size: 16px;
-  font-weight: var(--weight-semibold);
+  font-weight: var(--weight-bold);
   flex: none;
 }
 .app-shell__brand em {
-  font-family: var(--font-serif);
+  font-family: var(--font-sans);
   font-weight: var(--weight-regular);
   color: var(--fg-muted);
   font-size: var(--text-sm);
@@ -348,7 +348,6 @@ select:focus-visible {
   flex-direction: column;
   gap: var(--space-6);
 }
-.page-body--narrow { width: var(--container-page-narrow); }
 
 .page-head {
   display: grid;
@@ -542,10 +541,6 @@ select:focus-visible {
   width: var(--container-page);
 }
 
-.page--object-detail .page-body {
-  width: var(--container-page);
-}
-
 
 /* =============================================================================
    v2.5 — CONVERSATION LAYOUTS
@@ -596,7 +591,6 @@ select:focus-visible {
   height: 100%;
   overflow: hidden;
 }
-.page--conversation .page-body { display: none; }
 
 /* --- head: compact, ~48px, single line ------------------------------- */
 .conversation__head {
@@ -608,45 +602,6 @@ select:focus-visible {
   padding: 0 var(--space-6);
   border-bottom: 1px solid var(--border-default);
 }
-.conversation__title {
-  font-size: var(--text-sm);
-  font-weight: var(--weight-medium);
-  color: var(--fg-default);
-  margin: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
-  flex: 1;
-}
-.conversation__context {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: 2px 8px;
-  background: var(--bg-panel);
-  border-radius: var(--radius-sm);
-  font-size: var(--text-xs);
-  color: var(--fg-muted);
-  flex: none;
-}
-.conversation__context .type {
-  color: var(--fg-subtle);
-  font-weight: var(--weight-regular);
-}
-.conversation__menu {
-  appearance: none;
-  background: transparent;
-  border: 0;
-  padding: 4px 8px;
-  color: var(--fg-subtle);
-  cursor: pointer;
-  border-radius: var(--radius-sm);
-  font-size: var(--text-base);
-  line-height: 1;
-  flex: none;
-}
-.conversation__menu:hover { background: var(--fill-subtle); color: var(--fg-default); }
 
 /* --- stream: scrollable, centered 720px ------------------------------- */
 .conversation__stream {
@@ -655,38 +610,10 @@ select:focus-visible {
   overflow-y: auto;
   padding: var(--space-6) 0;
 }
-.conversation__stream-inner {
-  width: min(var(--conversation-stream-w), 100% - 2 * var(--space-6));
-  margin: 0 auto;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-5);
-}
 
 /* Empty state — greeting + starter prompts vertically centered above
    the composer. The host adds `.is-empty` when there are no messages yet. */
 .conversation__stream.is-empty { display: grid; place-items: center; }
-.conversation__stream.is-empty .conversation__stream-inner {
-  text-align: center;
-  gap: var(--space-6);
-}
-.conversation__greeting {
-  font-size: var(--text-2xl);
-  font-weight: var(--weight-medium);
-  color: var(--fg-default);
-  letter-spacing: -0.01em;
-  margin: 0;
-  line-height: var(--leading-tight);
-}
-.conversation__greeting em {
-  font-family: var(--font-serif);
-  font-style: italic;
-  font-weight: var(--weight-regular);
-  color: var(--fg-muted);
-}
-.conversation__stream.is-empty .starter-prompts {
-  justify-content: center;
-}
 
 /* --- composer: sticky bottom, centered 720px -------------------------- */
 .conversation__composer {
@@ -694,10 +621,6 @@ select:focus-visible {
   padding: var(--space-4) 0 var(--space-5);
   background: var(--bg-canvas);
   border-top: 1px solid var(--border-default);
-}
-.conversation__composer-inner {
-  width: min(var(--conversation-stream-w), 100% - 2 * var(--space-6));
-  margin: 0 auto;
 }
 
 
@@ -785,81 +708,4 @@ select:focus-visible {
 /* --- rail · closed --------------------------------------------------- */
 .split-panel__rail.is-closed {
   display: none;
-}
-
-
-/* =============================================================================
-   PANEL HEAD — shared between .conversation__head and .split-panel__rail
-   -----------------------------------------------------------------------------
-   The rail uses .panel__head for its top region (context badge + close).
-   Keeping it as a separate class so the rail head and the full-page
-   conversation head don't drift apart visually.
-   ============================================================================= */
-
-.panel__head {
-  flex: none;
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  height: 48px;
-  padding: 0 var(--space-4);
-  border-bottom: 1px solid var(--border-default);
-}
-.panel__title {
-  font-size: var(--text-sm);
-  font-weight: var(--weight-medium);
-  color: var(--fg-default);
-  margin: 0;
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.panel__context {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: 2px 8px;
-  background: var(--bg-panel);
-  border-radius: var(--radius-sm);
-  font-size: var(--text-xs);
-  color: var(--fg-muted);
-  flex: none;
-}
-.panel__context .type { color: var(--fg-subtle); }
-
-.panel__close,
-.panel__collapse {
-  appearance: none;
-  background: transparent;
-  border: 0;
-  width: 28px;
-  height: 28px;
-  display: grid;
-  place-items: center;
-  color: var(--fg-subtle);
-  cursor: pointer;
-  border-radius: var(--radius-sm);
-  flex: none;
-  font-size: var(--text-base);
-  line-height: 1;
-}
-.panel__close:hover,
-.panel__collapse:hover { background: var(--fill-subtle); color: var(--fg-default); }
-
-.panel__stream {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  padding: var(--space-4);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-4);
-}
-.panel__composer {
-  flex: none;
-  padding: var(--space-3) var(--space-4) var(--space-4);
-  border-top: 1px solid var(--border-default);
-  background: var(--bg-canvas);
 }

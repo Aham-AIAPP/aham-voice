@@ -39,12 +39,13 @@ export function AdminVoiceprints() {
         <table className="data-table">
           <thead>
             <tr>
-              <th className="col-grow">说话人</th>
+              <th className="col-grow">姓名</th>
+              <th className="col-fit">备注</th>
               <th className="col-fit">可见范围</th>
               <th className="col-fit">阈值</th>
               <th className="col-fit">归属团队</th>
               <th className="col-fit">状态</th>
-              <th className="col-fit">创建</th>
+              <th className="col-fit">创建时间</th>
               <th className="col-fit"></th>
             </tr>
           </thead>
@@ -52,8 +53,9 @@ export function AdminVoiceprints() {
             {rows.data.map((vp) => (
               <tr key={vp.id}>
                 <td><span className="primary">{vp.name}</span></td>
+                <td className="cat">{vp.note ? vp.note : "—"}</td>
                 <td className="cat">{SCOPE_LABEL[vp.scope] ?? vp.scope}</td>
-                <td className="meta" style={{ fontFamily: "var(--font-mono)" }}>{Number(vp.threshold).toFixed(2)}</td>
+                <td className="meta u-mono">{Number(vp.threshold).toFixed(2)}</td>
                 <td className="meta">{vp.team_id ?? "—"}</td>
                 <td>
                   <Status tone={vp.active ? "moss" : "muted"}>{vp.active ? "启用" : "停用"}</Status>

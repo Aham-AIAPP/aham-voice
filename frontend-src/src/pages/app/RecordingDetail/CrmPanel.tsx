@@ -34,7 +34,7 @@ function statusTone(status: string): React.ComponentProps<typeof Status>["tone"]
 function statusLabel(status: string): string {
   switch (status) {
     case "synced":
-      return "已同步到 NewCRM";
+      return "已同步到 Orchisky CRM";
     case "syncing":
       return "同步中";
     case "failed":
@@ -67,21 +67,21 @@ export function CrmPanel({ recordingId, crm, summaryStatus }: Props) {
   });
 
   if (summaryStatus !== "done") {
-    return <EmptyState description="生成完纪要后才能同步到 NewCRM。" />;
+    return <EmptyState description="生成完纪要后才能同步到 Orchisky CRM。" />;
   }
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-6)" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)", flexWrap: "wrap" }}>
+    <div className="u-stack-6">
+      <div className="u-flex u-items-center u-gap-3 u-wrap">
         <Status tone={statusTone(crm.status)}>{statusLabel(crm.status)}</Status>
-        {crm.synced_at && <span className="meta" style={{ fontSize: "var(--text-xs)" }}>{formatRelative(crm.synced_at)}</span>}
+        {crm.synced_at && <span className="meta u-fs-xs">{formatRelative(crm.synced_at)}</span>}
         {crm.relation_target_name && (
-          <span className="meta" style={{ fontSize: "var(--text-xs)" }}>
+          <span className="meta u-fs-xs">
             关联：{crm.relation_target_name}
             {crm.relation_source ? `（${crm.relation_source}）` : ""}
           </span>
         )}
-        <div style={{ marginLeft: "auto", display: "flex", gap: "var(--space-2)" }}>
+        <div className="u-ml-auto u-flex u-gap-2">
           {crm.recording_url && (
             <a className="btn btn--ghost btn--sm" href={crm.recording_url} target="_blank" rel="noopener">
               打开录音页
@@ -90,6 +90,11 @@ export function CrmPanel({ recordingId, crm, summaryStatus }: Props) {
           {crm.minute_url && (
             <a className="btn btn--ghost btn--sm" href={crm.minute_url} target="_blank" rel="noopener">
               打开纪要
+            </a>
+          )}
+          {crm.emotion_url && (
+            <a className="btn btn--ghost btn--sm" href={crm.emotion_url} target="_blank" rel="noopener">
+              打开情绪分析
             </a>
           )}
           <Button
@@ -110,11 +115,11 @@ export function CrmPanel({ recordingId, crm, summaryStatus }: Props) {
       {crm.error && <Diag code="CRM_E_SYNC">{crm.error}</Diag>}
       {error && <Diag code="CRM_E_REQUEST">{error}</Diag>}
 
-      <section className="card" style={{ padding: "var(--space-5)" }}>
-        <header style={{ marginBottom: "var(--space-3)" }}>
-          <h3 style={{ fontSize: "var(--text-lg)", fontWeight: 600 }}>手动关联到具体商机</h3>
-          <p className="meta" style={{ fontSize: "var(--text-xs)" }}>
-            搜索 NewCRM 商机（按名称、客户、负责人或单据号），点中后会触发一次新的同步并把关联标记为人工确认。
+      <section className="card u-p-5">
+        <header className="u-mb-3">
+          <h3 className="u-fs-lg u-fw-600">手动关联到具体商机</h3>
+          <p className="meta u-fs-xs">
+            搜索 Orchisky CRM 商机（按名称、客户、负责人或单据号），点中后会触发一次新的同步并把关联标记为人工确认。
           </p>
         </header>
         <FormRow label="搜索商机" optional htmlFor="crm-search">
@@ -132,23 +137,23 @@ export function CrmPanel({ recordingId, crm, summaryStatus }: Props) {
         )}
 
         {search.data && search.data.candidates.length > 0 && (
-          <ul className="item-list" style={{ marginTop: "var(--space-3)" }}>
+          <ul className="item-list u-mt-3">
             {search.data.candidates.map((cand) => (
-              <li key={cand.targetId} style={{ padding: "var(--space-3) 0", display: "flex", gap: "var(--space-3)", alignItems: "flex-start", borderBottom: "1px solid var(--border-default)" }}>
-                <div style={{ flex: 1 }}>
-                  <p style={{ fontWeight: 500 }}>{cand.targetName}</p>
-                  <p className="meta" style={{ fontSize: "var(--text-xs)" }}>
+              <li key={cand.targetId} className="u-pad-row-3 u-flex u-gap-3 u-items-start u-bb">
+                <div className="u-flex-1">
+                  <p className="u-fw-500">{cand.targetName}</p>
+                  <p className="meta u-fs-xs">
                     {[cand.customerName, cand.responsibleName, cand.stage, cand.industry]
                       .filter(Boolean)
                       .join(" · ")}
                   </p>
                   {cand.requirementPreview && (
-                    <p className="secondary" style={{ fontSize: "var(--text-xs)", marginTop: "var(--space-1)" }}>
+                    <p className="secondary u-fs-xs u-mt-1">
                       {cand.requirementPreview}
                     </p>
                   )}
                 </div>
-                <span className="meta" style={{ fontSize: "var(--text-xs)" }}>
+                <span className="meta u-fs-xs">
                   匹配度 {Math.round(cand.confidence * 100)}%
                 </span>
                 <Button

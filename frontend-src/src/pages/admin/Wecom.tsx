@@ -8,6 +8,7 @@ import { EmptyState } from "@/components/EmptyState";
 import { Field, FormRow } from "@/components/Field";
 import { Status } from "@/components/Status";
 import { readApiError } from "@/api/client";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import type { WecomSyncResult } from "@/api/types";
 
 export function AdminWecom() {
@@ -20,6 +21,7 @@ export function AdminWecom() {
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<WecomSyncResult | null>(null);
   const [synced, setSynced] = useState<WecomSyncResult | null>(null);
+  const [confirmSync, setConfirmSync] = useState(false);
 
   useEffect(() => {
     if (config.data) {
@@ -59,7 +61,7 @@ export function AdminWecom() {
   });
 
   return (
-    <div className="page-body page--object-index" style={{ maxWidth: "var(--container-page-narrow)" }}>
+    <div className="page-body page--object-index wc-page">
       <PageHead
         title="企业微信"
         subtitle="配置 CorpID / Secret / 销售部门 ID 后，预演看看会同步哪些人，确认后再正式写入。"
@@ -67,7 +69,7 @@ export function AdminWecom() {
 
       {error && <Diag code="WECOM_E_ACTION">{error}</Diag>}
 
-      <section className="card" style={{ padding: "var(--space-5)", marginBottom: "var(--space-4)", display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
+      <section className="card u-p-5 u-mb-4 u-flex u-col u-gap-4">
         <FormRow label="CorpID" required>
           <Field value={corpId} onChange={(e) => setCorpId(e.target.value)} placeholder="如：ww1234567890abcdef" />
         </FormRow>
@@ -87,12 +89,12 @@ export function AdminWecom() {
         <FormRow label="销售部门 ID" required hint="顶层销售部门的企微 department id，子部门会一起拉取。">
           <Field value={salesDept} onChange={(e) => setSalesDept(e.target.value)} placeholder="如：12" />
         </FormRow>
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: "var(--space-2)" }}>
+        <div className="u-row-end">
           <Button variant="primary" loading={save.isPending} onClick={() => save.mutate()}>保存配置</Button>
         </div>
       </section>
 
-      <section style={{ display: "flex", gap: "var(--space-2)", marginBottom: "var(--space-4)" }}>
+      <section className="u-flex u-gap-2 u-mb-4">
         <Button variant="ghost" loading={previewSync.isPending} onClick={() => { setError(null); setPreview(null); previewSync.mutate(); }}>
           预演同步
         </Button>
@@ -100,11 +102,7 @@ export function AdminWecom() {
           variant="primary"
           loading={realSync.isPending}
           onClick={() => {
-            if (window.confirm("正式从企业微信同步成员？被删除的成员会被本地停用。")) {
-              setError(null);
-              setSynced(null);
-              realSync.mutate();
-            }
+            setConfirmSync(true);
           }}
         >
           正式同步
@@ -113,6 +111,16 @@ export function AdminWecom() {
 
       {preview && <SyncResultCard title="预演结果" result={preview} />}
       {synced && <SyncResultCard title="正式同步完成" result={synced} />}
+
+      <ConfirmDialog
+        open={confirmSync}
+        tone="danger"
+        title="正式同步企业微信成员"
+        body="正式从企业微信同步成员？被删除的成员会被本地停用。"
+        confirmText="正式同步"
+        onCancel={() => setConfirmSync(false)}
+        onConfirm={() => { setConfirmSync(false); setError(null); setSynced(null); realSync.mutate(); }}
+      />
     </div>
   );
 }
@@ -122,14 +130,14 @@ function SyncResultCard({ title, result }: { title: string; result: WecomSyncRes
     return <EmptyState description={`${title}：没有变化。`} />;
   }
   return (
-    <section className="card" style={{ padding: "var(--space-5)", marginBottom: "var(--space-4)", display: "flex", flexDirection: "column", gap: "var(--space-3)" }}>
-      <header style={{ display: "flex", gap: "var(--space-2)", alignItems: "center" }}>
+    <section className="card u-p-5 u-mb-4 u-flex u-col u-gap-3">
+      <header className="u-flex u-gap-2 u-items-center">
         <strong>{title}</strong>
         <Status tone="moss">新增 {result.added_count}</Status>
         <Status tone="accent">更新 {result.updated_count}</Status>
         <Status tone="amber">停用 {result.disabled_count}</Status>
         {result.initial_password && (
-          <span className="meta" style={{ marginLeft: "auto", fontFamily: "var(--font-mono)" }}>
+          <span className="meta u-ml-auto u-mono">
             初始密码 {result.initial_password}
           </span>
         )}

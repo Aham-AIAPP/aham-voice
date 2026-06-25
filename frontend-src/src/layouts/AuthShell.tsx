@@ -6,9 +6,9 @@ export function AuthShell() {
   return (
     <div className="auth-shell">
       <div className="auth-shell__brand">
-        <span className="brand-mark">A</span>
+        <span className="brand-mark">O</span>
         <span>
-          兰之天 <em>AI · 录音转写</em>
+          Orchisky <em>Voice</em>
         </span>
       </div>
       <Outlet />

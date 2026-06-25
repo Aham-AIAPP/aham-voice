@@ -47,8 +47,7 @@ export function ReviseComposer({ recordingId, disabled, disabledReason }: Props)
   return (
     <form
       onSubmit={submit}
-      className="composer"
-      style={{ borderRadius: 0, border: 0, borderTop: "1px solid var(--border-default)", padding: "var(--space-3) var(--space-4)" }}
+      className="composer u-pad-3-4 rev-composer-form"
     >
       {error && <Diag code="SUM_E_REVISE">{error}</Diag>}
       <Textarea
@@ -64,7 +63,7 @@ export function ReviseComposer({ recordingId, disabled, disabledReason }: Props)
         disabled={disabled || revise.isPending}
       />
       <div className="composer-row">
-        <span className="meta" style={{ fontSize: "var(--text-2xs)", color: "var(--fg-subtle)" }}>
+        <span className="meta u-fs-2xs u-fg-subtle">
           每次修改会创建新版本，原版仍可翻到
         </span>
         <Button

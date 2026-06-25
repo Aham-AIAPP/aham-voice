@@ -205,12 +205,12 @@ function buildEvents(props: Props): TimelineEvent[] {
       : crmSync.error
         ? `错误：${crmSync.error.slice(0, 80)}`
         : crmSync.status === "not_configured"
-          ? "NewCRM 同步未配置"
+          ? "Orchisky CRM 同步未配置"
           : "未关联";
     events.push({
       id: "crm",
       at: crmSync.synced_at || rec.updated_at,
-      title: "同步到 NewCRM",
+      title: "同步到 Orchisky CRM",
       detail: targetText,
       tone: crmTone(crmSync.status),
       onClick: onOpenCrm,
@@ -273,17 +273,17 @@ export function Timeline(props: TimelineProps) {
   const currentLabel = donePct >= 100 ? "已完成" : currentEvent ? currentEvent.title : "处理中";
 
   return (
-    <section className="card" style={{ display: "flex", flexDirection: "column", gap: "var(--space-3)" }}>
-      <header style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-        <h3 style={{ fontSize: "var(--text-base)", fontWeight: "var(--weight-semibold)", margin: 0 }}>
+    <section className="card u-flex u-col u-gap-3">
+      <header className="u-flex u-between u-items-baseline">
+        <h3 className="u-fs-base u-fw-semibold u-m-0">
           录音处理时间线
         </h3>
-        <span className="meta" style={{ fontSize: "var(--text-xs)", color: "var(--fg-subtle)" }}>
+        <span className="meta u-fs-xs u-fg-subtle">
           {stagesDone}/2 阶段 · {donePct}%
         </span>
       </header>
 
-      <div className={cn("task", donePct >= 100 && "is-done")} style={{ border: 0, padding: 0, background: "transparent" }}>
+      <div className={cn("task u-btn-reset", donePct >= 100 && "is-done")}>
         <div className="task__head">
           <span className="task__name">整体进度</span>
           <span className="task__step">{donePct}%</span>
@@ -293,11 +293,11 @@ export function Timeline(props: TimelineProps) {
         </div>
       </div>
 
-      <p className="meta" style={{ fontSize: "var(--text-xs)", color: "var(--fg-subtle)", margin: 0 }}>
+      <p className="meta u-fs-xs u-fg-subtle u-m-0">
         当前：{currentLabel}
       </p>
 
-      <ol className="nv-timeline" style={{ marginTop: "var(--space-2)" }}>
+      <ol className="nv-timeline u-mt-2">
         {events.map((event) => {
           const isActive = !!event.artifact && !!props.activePreviewKey && (
             (event.id.startsWith("summary:") && event.id === `summary:${props.activePreviewKey.split(":")[1]}`) ||
@@ -318,8 +318,7 @@ export function Timeline(props: TimelineProps) {
                 {event.detail && <p className="nv-timeline__detail">{event.detail}</p>}
                 {event.task && event.task.state === "running" && (
                   <div
-                    className={cn("task", event.task.isStale && "is-indeterminate")}
-                    style={{ marginTop: "var(--space-2)", border: 0, padding: 0, background: "transparent" }}
+                    className={cn("task u-btn-reset u-mt-2", event.task.isStale && "is-indeterminate")}
                   >
                     <div className="task__bar">
                       <div className="task__fill" style={{ width: `${event.task.progress}%` }} />
@@ -329,16 +328,9 @@ export function Timeline(props: TimelineProps) {
                 {event.artifact && (
                   <button
                     type="button"
-                    className={cn("msg-attachment", isActive && "is-active")}
+                    className={cn("msg-attachment tl-doc-card u-w-full u-pointer u-mt-2", isActive && "is-active")}
                     onClick={event.onClick}
                     style={{
-                      appearance: "none",
-                      width: "100%",
-                      textAlign: "left",
-                      cursor: "pointer",
-                      marginTop: "var(--space-2)",
-                      font: "inherit",
-                      color: "inherit",
                       background: isActive ? "var(--accent-soft)" : "var(--bg-canvas)",
                       borderColor: isActive ? "var(--accent-default)" : undefined,
                     }}
@@ -360,16 +352,11 @@ export function Timeline(props: TimelineProps) {
                     type="button"
                     disabled={event.actionDisabled}
                     onClick={event.actionDisabled ? undefined : event.onClick}
+                    className="tl-action-btn u-mt-2"
                     style={{
-                      appearance: "none",
-                      background: "transparent",
-                      border: "1px solid var(--border-default)",
-                      borderRadius: "var(--radius-sm)",
-                      padding: "var(--space-1) var(--space-3)",
-                      marginTop: "var(--space-2)",
-                      font: "inherit",
+                      // font-size 必须内联：.tl-action-btn 的 font:inherit 会重置 font-size，
+                      // 内联优先级最高，复刻原内联「font:inherit + fontSize:var(--text-xs)」。
                       fontSize: "var(--text-xs)",
-                      color: "var(--fg-default)",
                       cursor: event.actionDisabled ? "default" : "pointer",
                       opacity: event.actionDisabled ? 0.6 : 1,
                     }}

@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { fetchTeams, fetchUsers, patchUser, resetUserPassword } from "@/api/endpoints";
 import { PageHead } from "@/components/PageHead";
 import { Button } from "@/components/Button";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { Status } from "@/components/Status";
 import { Icon } from "@/components/Icon";
 import { Diag } from "@/components/Diag";
@@ -40,6 +41,7 @@ function UserEditor({ user, teams, onClose }: { user: User; teams: { id: string;
     status: user.status,
   });
   const [error, setError] = useState<string | null>(null);
+  const [confirmReset, setConfirmReset] = useState(false);
 
   const isSelf = user.id === actor?.id;
 
@@ -69,12 +71,12 @@ function UserEditor({ user, teams, onClose }: { user: User; teams: { id: string;
   });
 
   return (
-    <div className="card" style={{ padding: "var(--space-5)", margin: "var(--space-3) 0", display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
-      <header style={{ display: "flex", gap: "var(--space-3)", alignItems: "center" }}>
+    <div className="card u-p-5 u-flex u-col u-gap-4 usr-editor-card">
+      <header className="u-flex u-gap-3 u-items-center">
         <Avatar name={user.name} size="md" />
-        <div style={{ flex: 1 }}>
+        <div className="u-flex-1">
           <strong>{user.name}</strong>
-          <p className="meta" style={{ fontSize: "var(--text-xs)" }}>
+          <p className="meta u-fs-xs">
             {user.username} · {user.source === "wecom" ? "企业微信" : "本地账号"}
           </p>
         </div>
@@ -83,7 +85,7 @@ function UserEditor({ user, teams, onClose }: { user: User; teams: { id: string;
 
       {error && <Diag code="USER_E_PATCH">{error}</Diag>}
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "var(--space-4)" }}>
+      <div className="u-card-grid">
         <FormRow label="姓名">
           <Field value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} />
         </FormRow>
@@ -135,9 +137,9 @@ function UserEditor({ user, teams, onClose }: { user: User; teams: { id: string;
 
       {draft.role === "manager" && (
         <FormRow label="管理团队" hint="勾选 manager 能查看 / 管理的团队。">
-          <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--space-2)" }}>
+          <div className="u-cluster-wrap">
             {teams.map((t) => (
-              <label key={t.id} style={{ display: "inline-flex", gap: "var(--space-1)", alignItems: "center", padding: "var(--space-1) var(--space-2)", border: "1px solid var(--border-default)", borderRadius: "var(--radius-md)" }}>
+              <label key={t.id} className="u-iflex u-gap-1 u-items-center u-pad-1-2 usr-team-chip">
                 <input
                   type="checkbox"
                   checked={draft.managed_team_ids.includes(t.id)}
@@ -157,23 +159,30 @@ function UserEditor({ user, teams, onClose }: { user: User; teams: { id: string;
         </FormRow>
       )}
 
-      <div style={{ display: "flex", justifyContent: "space-between", gap: "var(--space-2)" }}>
+      <div className="u-flex u-between u-gap-2">
         <Button
           variant="ghost"
           loading={resetPwd.isPending}
           onClick={() => {
-            if (window.confirm(`将 ${user.name} 的密码重置为默认值并强制下次登录修改？`)) {
-              resetPwd.mutate();
-            }
+            setConfirmReset(true);
           }}
         >
           重置密码
         </Button>
-        <div style={{ display: "flex", gap: "var(--space-2)" }}>
+        <div className="u-row">
           <Button variant="ghost" onClick={onClose}>取消</Button>
           <Button variant="primary" loading={save.isPending} onClick={() => save.mutate()}>保存</Button>
         </div>
       </div>
+      <ConfirmDialog
+        open={confirmReset}
+        tone="danger"
+        title="重置密码"
+        body={`将 ${user.name} 的密码重置为默认值，并强制其下次登录修改？`}
+        confirmText="重置"
+        onCancel={() => setConfirmReset(false)}
+        onConfirm={() => { setConfirmReset(false); resetPwd.mutate(); }}
+      />
     </div>
   );
 }
@@ -259,7 +268,7 @@ export function AdminUsers() {
                     </div>
                   </div>
                 </td>
-                <td className="meta" style={{ fontFamily: "var(--font-mono)" }}>{u.username}</td>
+                <td className="meta u-mono">{u.username}</td>
                 <td className="cat">{u.dept || "—"}</td>
                 <td><Status tone={ROLE_TONE[u.role]}>{ROLE_LABEL[u.role]}</Status></td>
                 <td className="meta">{u.source === "wecom" ? "企微" : "本地"}</td>

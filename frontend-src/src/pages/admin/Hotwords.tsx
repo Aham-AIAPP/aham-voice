@@ -1,9 +1,7 @@
 import { Hotwords } from "@/pages/app/Hotwords";
 
-// The admin "热词总览" and the user-side hotwords page show the same data
-// surface — the canonical hotwords table with all sync controls. The user-
-// page-level access check already covers both admin and manager. Just re-use
-// the implementation; if admin gets unique controls later, fork here.
+// 管理员热词管理与用户端完全一致：同一个简洁的个人热词页（文本框 +「、」分隔 + 导入 txt + 保存）。
+// 已移除 CRM/企微同步、热词来源、评分重算等本机部署中无对接、不可用的死功能。
 export function AdminHotwords() {
   return <Hotwords />;
 }

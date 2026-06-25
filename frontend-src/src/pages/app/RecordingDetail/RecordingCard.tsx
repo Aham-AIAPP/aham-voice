@@ -32,13 +32,13 @@ export function RecordingCard({ recording, segments, hotwordPackage }: Props) {
   const hotwordsEnabled = !!hotwordPackage && hotwordPackage.asr_terms_count > 0;
 
   return (
-    <section className="card" style={{ display: "flex", flexDirection: "column", gap: "var(--space-3)" }}>
-      <header style={{ display: "flex", flexWrap: "wrap", gap: "var(--space-2)", alignItems: "baseline" }}>
-        <span style={{ fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--fg-subtle)", textTransform: "uppercase", letterSpacing: "var(--tracking-caps)" }}>
+    <section className="card u-flex u-col u-gap-3">
+      <header className="u-flex u-wrap u-gap-2 u-items-baseline">
+        <span className="u-mono u-fs-2xs u-fg-subtle u-caps">
           录音
         </span>
-        <span style={{ fontSize: "var(--text-sm)", fontWeight: "var(--weight-medium)" }}>{recording.filename}</span>
-        <span className="meta" style={{ fontSize: "var(--text-xs)", color: "var(--fg-subtle)" }}>
+        <span className="u-fs-sm u-fw-medium">{recording.filename}</span>
+        <span className="meta u-fs-xs u-fg-subtle">
           {recording.meeting_type} · {recording.duration_label}
         </span>
       </header>
@@ -47,17 +47,10 @@ export function RecordingCard({ recording, segments, hotwordPackage }: Props) {
         controls
         preload="metadata"
         src={recordingAudioUrl(recording.id)}
-        style={{ width: "100%" }}
+        className="u-w-full"
       />
 
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(3, 1fr)",
-          gap: "var(--space-3)",
-          marginTop: "var(--space-1)",
-        }}
-      >
+      <div className="u-grid u-gap-3 u-mt-1 rc-stat-grid">
         <div className="stat-tile">
           <span className="stat-tile__label">热词</span>
           <span className={`stat-tile__value${hotwordsEnabled ? "" : " is-pending"}`}>

@@ -39,22 +39,11 @@ export function Login() {
   return (
     <form className="auth-form" onSubmit={handleSubmit}>
       <h1 className="auth-form__title">
-        登录到 <em>兰之天</em>
+        登录到 <em>Orchisky Voice</em>
       </h1>
       <p className="auth-form__lede">使用公司账号继续。首次登录后会被引导设置新密码。</p>
 
-      <div
-        style={{
-          fontSize: "var(--text-xs)",
-          color: "var(--fg-subtle)",
-          background: "var(--bg-panel)",
-          border: "1px solid var(--border-default)",
-          borderRadius: "var(--radius-md)",
-          padding: "var(--space-3)",
-          marginBottom: "var(--space-4)",
-          lineHeight: 1.7,
-        }}
-      >
+      <div className="auth-hint">
         <div>用户名：姓名全拼小写（如 <code>lichengbao</code> / <code>zhutao</code>）</div>
         <div>初始密码：<code>orchisky888888</code>（首次登录会要求改密）</div>
       </div>

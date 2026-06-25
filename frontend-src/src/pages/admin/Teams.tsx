@@ -30,13 +30,13 @@ function TeamEditor({ team, onClose }: { team: Team; onClose: () => void }) {
   const managers = (users.data ?? []).filter((u) => u.role === "manager" || u.role === "admin");
 
   return (
-    <div className="card" style={{ padding: "var(--space-5)", margin: "var(--space-3) 0", display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
-      <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+    <div className="card u-p-5 u-flex u-col u-gap-4 tm-editor-card">
+      <header className="u-row-between">
         <strong>{team.name}</strong>
         <Button variant="ghost" size="sm" onClick={onClose}>关闭</Button>
       </header>
       {error && <Diag code="TEAM_E_PATCH">{error}</Diag>}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "var(--space-4)" }}>
+      <div className="u-card-grid">
         <FormRow label="名称">
           <Field value={name} onChange={(e) => setName(e.target.value)} />
         </FormRow>
@@ -45,10 +45,10 @@ function TeamEditor({ team, onClose }: { team: Team; onClose: () => void }) {
         </FormRow>
       </div>
       <FormRow label="主管 / 组长" hint="勾选可以管理本团队成员的人。">
-        <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--space-2)" }}>
+        <div className="u-cluster-wrap">
           {managers.length === 0 && <span className="meta">没有 manager / admin 用户。</span>}
           {managers.map((u) => (
-            <label key={u.id} style={{ display: "inline-flex", gap: "var(--space-1)", alignItems: "center", padding: "var(--space-1) var(--space-2)", border: "1px solid var(--border-default)", borderRadius: "var(--radius-md)" }}>
+            <label key={u.id} className="u-iflex u-gap-1 u-items-center u-pad-1-2 tm-manager-chip">
               <input
                 type="checkbox"
                 checked={managerIds.includes(u.id)}
@@ -61,7 +61,7 @@ function TeamEditor({ team, onClose }: { team: Team; onClose: () => void }) {
           ))}
         </div>
       </FormRow>
-      <div style={{ display: "flex", justifyContent: "flex-end", gap: "var(--space-2)" }}>
+      <div className="u-row-end">
         <Button variant="ghost" onClick={onClose}>取消</Button>
         <Button variant="primary" loading={save.isPending} onClick={() => save.mutate()}>保存</Button>
       </div>
@@ -107,7 +107,7 @@ export function AdminTeams() {
                   <span className="primary">{t.name}</span>
                 </td>
                 <td className="cat">{t.dept || "—"}</td>
-                <td className="meta" style={{ fontFamily: "var(--font-mono)" }}>{t.wecom_department_id ?? "—"}</td>
+                <td className="meta u-mono">{t.wecom_department_id ?? "—"}</td>
                 <td className="meta">{t.member_count}</td>
                 <td className="meta">{t.recording_count}</td>
                 <td>

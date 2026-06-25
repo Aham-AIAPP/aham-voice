@@ -9,7 +9,6 @@ import { Icon } from "@/components/Icon";
 import { PageLoading } from "@/components/PageLoading";
 import { EmptyState } from "@/components/EmptyState";
 import { Status } from "@/components/Status";
-import { cn } from "@/utils/cn";
 import { formatRelative } from "@/utils/format";
 import { RecordingCard } from "./RecordingCard";
 import { SpeakersCard } from "./SpeakersCard";
@@ -17,10 +16,9 @@ import { Timeline } from "./Timeline";
 import { Preview, TRANSCRIPT_KEY, EMOTION_KEY, summaryArtifactKey, type ArtifactKey } from "./Preview";
 import { ReviseComposer } from "./ReviseComposer";
 import { Drawer } from "./Drawer";
-import { SpeakersPanel } from "./SpeakersPanel";
 import { CrmPanel } from "./CrmPanel";
 
-type DrawerKind = "speaker" | "crm" | null;
+type DrawerKind = "crm" | null;
 
 function overallTone(asr: string, summary: string): React.ComponentProps<typeof Status>["tone"] {
   if (asr === "failed" || summary === "failed") return "rust";
@@ -47,8 +45,8 @@ export function RecordingDetail() {
   const qc = useQueryClient();
 
   // Apply the split-panel template to the body region for this route only.
-  // Default state: rail is .is-closed → grid collapses to 1fr · 0, left main
-  // fills viewport. When a doc card is clicked, rail opens to 50% width.
+  // 左侧主内容用此模板拿到稳定的视口高度（含底部 composer dock）；右侧栏始终保持
+  // is-closed（grid 收成 1fr，左侧满宽），预览改为浮出抽屉（见下方 previewKey 抽屉）。
   useEffect(() => {
     const main = document.querySelector("main.app-shell__body");
     if (!main) return;
@@ -94,10 +92,9 @@ export function RecordingDetail() {
     },
   });
 
-  // Rail-preview selection. null = rail closed (default).
+  // 预览选择。null = 抽屉关闭（默认）。预览以浮出抽屉形式展示（非内嵌分栏）。
   const [previewKey, setPreviewKey] = useState<ArtifactKey | null>(null);
   const [drawer, setDrawer] = useState<DrawerKind>(null);
-  const [drawerSpeaker, setDrawerSpeaker] = useState<string | undefined>(undefined);
 
   const summaries = detail.data?.summaries ?? [];
   const currentSummary = useMemo(
@@ -119,14 +116,14 @@ export function RecordingDetail() {
 
   if (detail.isLoading) {
     return (
-      <div style={{ padding: "var(--space-8)" }}>
+      <div className="u-p-8">
         <PageLoading />
       </div>
     );
   }
   if (detail.isError) {
     return (
-      <div style={{ padding: "var(--space-8)" }}>
+      <div className="u-p-8">
         <Diag code="REC_E_DETAIL">{readApiError(detail.error)}</Diag>
         <Button variant="ghost" onClick={() => navigate("/app/recordings")}>返回列表</Button>
       </div>
@@ -200,14 +197,7 @@ export function RecordingDetail() {
 
           <RecordingCard recording={rec} segments={segments} hotwordPackage={pkg} />
 
-          <SpeakersCard
-            recordingId={recordingId}
-            asrStatus={rec.asr_status}
-            onPickSpeaker={(speaker) => {
-              setDrawerSpeaker(speaker);
-              setDrawer("speaker");
-            }}
-          />
+          <SpeakersCard recordingId={recordingId} asrStatus={rec.asr_status} />
 
           <Timeline
             recording={rec}
@@ -236,8 +226,12 @@ export function RecordingDetail() {
         </div>
       </div>
 
-      {/* ───────────────── RIGHT RAIL (slides in only when an artifact is selected) ───────────────── */}
-      <aside className={cn("split-panel__rail", previewKey === null && "is-closed")}>
+      {/* 右侧栏占位：始终 is-closed（display:none），让 split-panel 栅格收成单列、左侧满宽。
+          预览本身改为下面的浮出抽屉。 */}
+      <aside className="split-panel__rail is-closed" aria-hidden />
+
+      {/* ───────────────── 预览浮出抽屉（复用 Drawer：scrim/Esc/锁滚动/焦点陷阱统一）───────────────── */}
+      <Drawer open={previewKey !== null} raw onClose={() => setPreviewKey(null)}>
         {previewKey !== null && (
           <Preview
             recordingId={recordingId}
@@ -249,29 +243,13 @@ export function RecordingDetail() {
             onClose={() => setPreviewKey(null)}
           />
         )}
-      </aside>
+      </Drawer>
 
       {/* ───────────────── Drawers ───────────────── */}
       <Drawer
-        open={drawer === "speaker"}
-        onClose={() => {
-          setDrawer(null);
-          setDrawerSpeaker(undefined);
-        }}
-        title="说话人管理"
-        subtitle={rec.title}
-      >
-        <SpeakersPanel
-          recordingId={recordingId}
-          asrStatus={rec.asr_status}
-          initialSpeaker={drawerSpeaker}
-        />
-      </Drawer>
-
-      <Drawer
         open={drawer === "crm"}
         onClose={() => setDrawer(null)}
-        title="NewCRM 同步"
+        title="Orchisky CRM 同步"
         subtitle={rec.title}
       >
         <CrmPanel
