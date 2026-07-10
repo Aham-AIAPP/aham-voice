@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### 变更
+- 仓库迁移至新账号 [Aham-AIAPP](https://github.com/Aham-AIAPP)（旧账号不可用），全部链接更新；README 徽章行加「联系我（微信）」，「关于 Aham」加公众号/作者微信二维码，产品矩阵补 Aham Word。
+
+
 ## [2.0.0] - 2026-06-21
 
 从团队协作版收敛为**单机个人版**，并对齐 Aham UI v6.1 全面重构界面。
@@ -38,6 +42,6 @@
 
 - 首个版本：本地离线录音转写（FunASR paraformer + VAD + 标点）、说话人分离（CAM++）、声学情绪（emotion2vec）；会议纪要与情绪语义分析走云端大模型（OpenAI 兼容接口，比如 DeepSeek 等）。macOS 单机桌面应用。
 
-[Unreleased]: https://github.com/li599198347-svg/aham-voice/compare/v2.0.0...HEAD
-[2.0.0]: https://github.com/li599198347-svg/aham-voice/releases/tag/v2.0.0
-[1.0.0]: https://github.com/li599198347-svg/aham-voice/releases/tag/v1.0.0
+[Unreleased]: https://github.com/Aham-AIAPP/aham-voice/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/Aham-AIAPP/aham-voice/releases/tag/v2.0.0
+[1.0.0]: https://github.com/Aham-AIAPP/aham-voice/releases/tag/v1.0.0

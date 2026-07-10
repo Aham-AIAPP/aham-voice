@@ -17,7 +17,7 @@ cd .. && <venv-python> -m uvicorn backend.app.main:app --port 8765
 ## 约定
 
 - 提交信息用中文、`类型: 说明` 结构（`feat:` / `fix:` / `docs:` / `refactor:` 等）。
-- UI 改动对齐 [Aham UI](https://github.com/li599198347-svg/aham-ui) 设计规范（单蓝点缀、三层灰、扁平、仅浮层有阴影、状态用点+文字不用红黄绿灯）。
+- UI 改动对齐 [Aham UI](https://github.com/Aham-AIAPP/aham-ui) 设计规范（单蓝点缀、三层灰、扁平、仅浮层有阴影、状态用点+文字不用红黄绿灯）。
 
 ## 发版流程（维护者）
 

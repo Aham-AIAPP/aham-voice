@@ -16,8 +16,8 @@
 - ffmpeg：`brew install ffmpeg`
 
 ```bash
-git clone https://github.com/li599198347-svg/AhamVoice.git
-cd AhamVoice
+git clone https://github.com/Aham-AIAPP/aham-voice.git
+cd aham-voice
 ```
 
 ---
