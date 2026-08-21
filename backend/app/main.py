@@ -104,7 +104,7 @@ def save_user_config(updates: dict[str, Any]) -> dict[str, Any]:
 
 
 DEFAULT_LLM_API_BASE = "https://api.deepseek.com"
-DEFAULT_LLM_MODEL = "deepseek-v4-pro"
+DEFAULT_LLM_MODEL = "deepseek-v4-flash"
 
 
 def get_llm_config() -> tuple[str, str, str]:
@@ -365,22 +365,6 @@ def ensure_schema() -> None:
                 duration_label text not null,
                 asr_status text not null default 'pending',
                 summary_status text not null default 'pending',
-                crm_sync_status text not null default 'pending',
-                crm_sync_error text,
-                crm_synced_at text,
-                crm_recording_id text,
-                crm_minute_id text,
-                crm_recording_url text,
-                crm_minute_url text,
-                crm_emotion_id text,
-                crm_emotion_url text,
-                crm_relation_status text,
-                crm_relation_source text,
-                crm_relation_confidence real,
-                crm_relation_target_type text,
-                crm_relation_target_id text,
-                crm_relation_target_name text,
-                crm_sync_response text not null default '{}',
                 created_at text not null,
                 updated_at text not null
             );
@@ -551,22 +535,6 @@ def ensure_schema() -> None:
                 conn.execute(f"alter table users add column {column} {definition}")
         recording_cols = {row["name"] for row in conn.execute("pragma table_info(recordings)").fetchall()}
         recording_migrations = {
-            "crm_sync_status": "text not null default 'pending'",
-            "crm_sync_error": "text",
-            "crm_synced_at": "text",
-            "crm_recording_id": "text",
-            "crm_minute_id": "text",
-            "crm_recording_url": "text",
-            "crm_minute_url": "text",
-            "crm_emotion_id": "text",
-            "crm_emotion_url": "text",
-            "crm_relation_status": "text",
-            "crm_relation_source": "text",
-            "crm_relation_confidence": "real",
-            "crm_relation_target_type": "text",
-            "crm_relation_target_id": "text",
-            "crm_relation_target_name": "text",
-            "crm_sync_response": "text not null default '{}'",
             "expected_speakers": "integer",
         }
         for column, definition in recording_migrations.items():
@@ -1104,6 +1072,11 @@ def can_access_recording(conn: sqlite3.Connection, recording_id: str, user: dict
 def recording_payload(conn: sqlite3.Connection, rec: dict[str, Any]) -> dict[str, Any]:
     owner = rowdict(conn.execute("select name from users where id = ?", (rec["owner_id"],)).fetchone())
     payload = dict(rec)
+    # Existing databases may still contain legacy CRM columns. They are kept
+    # on disk for non-destructive compatibility but are no longer exposed.
+    for key in tuple(payload):
+        if key.startswith("crm_"):
+            payload.pop(key)
     payload["owner_name"] = owner["name"] if owner else rec["owner_id"]
     return payload
 
@@ -2208,419 +2181,6 @@ def env_float(name: str, default: float, minimum: float, maximum: float) -> floa
     return max(minimum, min(value, maximum))
 
 
-def env_bool(name: str, default: bool = False) -> bool:
-    raw = os.environ.get(name)
-    if raw is None:
-        return default
-    return raw.strip().lower() in {"1", "true", "yes", "on"}
-
-
-def env_json(name: str, default: Any) -> Any:
-    raw = os.environ.get(name, "").strip()
-    if not raw:
-        return default
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        return default
-
-
-def newcrm_config() -> tuple[str, str]:
-    # 读取优先级：环境变量 -> config.json（应用内「设置」页可配）。
-    cfg = load_user_config()
-    base = (
-        os.environ.get("NEWCRM_BASE_URL")
-        or cfg.get("newcrm_base_url")
-        or ""
-    ).strip().rstrip("/")
-    token = (
-        os.environ.get("NEWCRM_TRANSCRIPT_IMPORT_TOKEN", "").strip()
-        or os.environ.get("LOCAL_TRANSCRIPT_IMPORT_TOKEN", "").strip()
-        or os.environ.get("AHAM_TRANSCRIPT_IMPORT_TOKEN", "").strip()
-        or (cfg.get("newcrm_token") or "").strip()
-    )
-    return base, token
-
-
-def newcrm_owner_account(user: dict[str, Any]) -> str:
-    mapping = env_json("NEWCRM_OWNER_ACCOUNT_MAP", {})
-    candidates = [
-        user.get("username"),
-        user.get("wecom_userid"),
-        user.get("id"),
-        user.get("email"),
-        user.get("name"),
-    ]
-    if isinstance(mapping, dict):
-        for key in candidates:
-            if key and mapping.get(str(key)):
-                return str(mapping[str(key)])
-    owner_account = str(
-        user.get("username")
-        or user.get("wecom_userid")
-        or user.get("id")
-        or os.environ.get("NEWCRM_DEFAULT_OWNER_ACCOUNT", "")
-    ).strip()
-    if re.fullmatch(r"[A-Za-z][A-Za-z0-9._-]*", owner_account):
-        return owner_account.lower()
-    return owner_account
-
-
-def markdown_sections(markdown: str | None) -> list[dict[str, Any]]:
-    text = (markdown or "").strip()
-    if not text:
-        return []
-    sections: list[dict[str, Any]] = []
-    current: dict[str, Any] | None = None
-    for line in text.splitlines():
-        match = re.match(r"^(#{1,3})\s+(.+)$", line.strip())
-        if match:
-            if current:
-                body = "\n".join(current.pop("body_lines")).strip()
-                if body:
-                    current["body"] = body
-                sections.append(current)
-            current = {"title": match.group(2).strip(), "body_lines": [], "bullets": []}
-            continue
-        if not current:
-            continue
-        bullet = re.match(r"^\s*[-*]\s+(.+)$", line)
-        if bullet:
-            current["bullets"].append(bullet.group(1).strip())
-        else:
-            current["body_lines"].append(line)
-    if current:
-        body = "\n".join(current.pop("body_lines")).strip()
-        if body:
-            current["body"] = body
-        sections.append(current)
-    return [
-        {"title": item["title"], "body": item.get("body"), "bullets": item.get("bullets") or []}
-        for item in sections
-        if item.get("title") and (item.get("body") or item.get("bullets"))
-    ][:24]
-
-
-def compact_json(value: Any) -> Any:
-    if isinstance(value, dict):
-        return {key: compact_json(item) for key, item in value.items() if item is not None}
-    if isinstance(value, list):
-        return [compact_json(item) for item in value]
-    return value
-
-
-def crm_sync_payload(rec: dict[str, Any]) -> dict[str, Any]:
-    response = safe_json(rec.get("crm_sync_response"), {})
-    data = response.get("data") if isinstance(response, dict) else {}
-    auto_link = data.get("autoLink") if isinstance(data, dict) else {}
-    return {
-        "status": rec.get("crm_sync_status") or "pending",
-        "error": rec.get("crm_sync_error"),
-        "synced_at": rec.get("crm_synced_at"),
-        "recording_id": rec.get("crm_recording_id"),
-        "minute_id": rec.get("crm_minute_id"),
-        "recording_url": rec.get("crm_recording_url"),
-        "minute_url": rec.get("crm_minute_url"),
-        "emotion_id": rec.get("crm_emotion_id"),
-        "emotion_url": rec.get("crm_emotion_url"),
-        "relation_status": rec.get("crm_relation_status"),
-        "relation_source": rec.get("crm_relation_source"),
-        "relation_confidence": rec.get("crm_relation_confidence"),
-        "relation_target_type": rec.get("crm_relation_target_type"),
-        "relation_target_id": rec.get("crm_relation_target_id"),
-        "relation_target_name": rec.get("crm_relation_target_name"),
-        "selected": auto_link.get("selected") if isinstance(auto_link, dict) else None,
-        "candidates": auto_link.get("candidates", []) if isinstance(auto_link, dict) else [],
-    }
-
-
-def build_newcrm_import_payload(
-    conn: sqlite3.Connection,
-    rec: dict[str, Any],
-    user: dict[str, Any],
-    relation: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    owner_account = newcrm_owner_account(user)
-    if not owner_account:
-        raise RuntimeError("NEWCRM owner account is not configured")
-    rows = rowsdict(
-        conn.execute(
-            """
-            select id,start_sec,end_sec,start_label,speaker,speaker_name,voiceprint_id,speaker_confidence,text
-            from transcript_segments
-            where recording_id = ?
-            order by start_sec
-            """,
-            (rec["id"],),
-        ).fetchall()
-    )
-    segments = []
-    for row in rows:
-        start_sec = float(row.get("start_sec") or 0)
-        end_sec = float(row.get("end_sec") or start_sec)
-        segments.append(
-            {
-                "id": row["id"],
-                "startMs": int(start_sec * 1000),
-                "endMs": int(end_sec * 1000),
-                "startSec": start_sec,
-                "endSec": end_sec,
-                "startLabel": row.get("start_label"),
-                "endLabel": seconds_label(end_sec),
-                "speakerLabel": f"Speaker {row.get('speaker')}",
-                "speakerName": row.get("speaker_name"),
-                "voiceprintId": row.get("voiceprint_id"),
-                "speakerConfidence": row.get("speaker_confidence"),
-                "text": row.get("text") or "",
-            }
-        )
-    summary = rowdict(
-        conn.execute(
-            """
-            select * from summaries
-            where recording_id = ?
-            order by is_current desc, version desc, created_at desc
-            limit 1
-            """,
-            (rec["id"],),
-        ).fetchone()
-    )
-    payload: dict[str, Any] = {
-        "externalId": f"newvoice:{rec['id']}",
-        "title": rec["title"],
-        "ownerAccount": owner_account,
-        "occurredAt": rec.get("created_at"),
-        "source": {
-            "provider": "NewVoice",
-            "localRecordingId": rec["id"],
-            "meetingType": rec.get("meeting_type"),
-            "tag": rec.get("tag"),
-            "durationMs": int(float(rec.get("duration") or 0) * 1000),
-            "durationLabel": rec.get("duration_label"),
-            "segmentCount": len(segments),
-            "speakerCount": len({item.get("speakerName") or item.get("speakerLabel") for item in segments}),
-            "originalAudioStored": False,
-        },
-        "businessContext": {
-            "localTitle": rec.get("title"),
-            "meetingType": rec.get("meeting_type"),
-            "customerProjectText": rec.get("tag"),
-            "ownerName": user.get("name"),
-            "ownerAccount": owner_account,
-        },
-        "transcript": {
-            "durationMs": int(float(rec.get("duration") or 0) * 1000),
-            "speakers": [],
-            "segments": segments,
-        },
-        "autoLink": {"target": "OPPORTUNITY", "enabled": relation is None},
-    }
-    if summary:
-        payload["source"].update({"summaryVersion": summary.get("version") or 1, "summaryModel": summary.get("model")})
-        payload["minute"] = {
-            "title": f"{rec['title']} 会议纪要",
-            "templateId": "newvoice-summary",
-            "templateName": "NewVoice 录音纪要",
-            "markdown": summary["content"],
-            "sections": markdown_sections(summary["content"]),
-        }
-    if relation:
-        payload["relations"] = [
-            {
-                "targetType": relation.get("targetType") or "OPPORTUNITY",
-                "targetId": relation.get("targetId"),
-                "targetName": relation.get("targetName"),
-                "confidence": float(relation.get("confidence") or 1),
-                "source": "USER_CONFIRMED",
-                "status": "LINKED",
-                "reason": "用户在 NewVoice 手动确认关联",
-            }
-        ]
-        payload["autoLink"] = {"target": "OPPORTUNITY", "enabled": False}
-    return compact_json(payload)
-
-
-def build_newcrm_emotion_payload(
-    conn: sqlite3.Connection,
-    rec: dict[str, Any],
-    user: dict[str, Any],
-    emotion: dict[str, Any],
-) -> dict[str, Any]:
-    """把「对话情绪分析」构造成同一条录音(同 externalId)下的独立 Minute 文档。
-    用不同的 templateId(newvoice-emotion)，CRM 按 (recordingId, templateId) upsert，
-    会与会议纪要并存为两份文档；不重复触发商机自动关联。"""
-    payload = build_newcrm_import_payload(conn, rec, user, relation=None)
-    payload["minute"] = {
-        "title": f"{rec['title']} 对话情绪分析",
-        "templateId": "newvoice-emotion",
-        "templateName": "NewVoice 对话情绪分析",
-        "markdown": emotion.get("content") or "",
-        "sections": markdown_sections(emotion.get("content") or ""),
-    }
-    payload["autoLink"] = {"target": "OPPORTUNITY", "enabled": False}
-    payload.pop("relations", None)
-    payload["source"] = {**payload.get("source", {}), "artifact": "emotion-analysis", "emotionModel": emotion.get("model")}
-    return compact_json(payload)
-
-
-async def sync_recording_to_newcrm(
-    recording_id: str,
-    user: dict[str, Any],
-    relation: dict[str, Any] | None = None,
-    raise_on_error: bool = True,
-) -> dict[str, Any]:
-    base, token = newcrm_config()
-    with db() as conn:
-        rec = can_access_recording(conn, recording_id, user)
-        if not base or not token:
-            conn.execute(
-                """
-                update recordings
-                set crm_sync_status = ?, crm_sync_error = ?, updated_at = ?
-                where id = ?
-                """,
-                ("not_configured", "NewCRM 同步地址或导入 token 未配置", now(), recording_id),
-            )
-            if raise_on_error:
-                raise HTTPException(status_code=503, detail="NewCRM sync is not configured")
-            return {"ok": False, "diagnostic": "NEWCRM_SYNC_NOT_CONFIGURED"}
-        payload = build_newcrm_import_payload(conn, rec, user, relation)
-        conn.execute(
-            "update recordings set crm_sync_status = ?, crm_sync_error = null, updated_at = ? where id = ?",
-            ("syncing", now(), recording_id),
-        )
-
-    try:
-        # trust_env=False — NewCRM is local; macOS system proxy (e.g. ClashX at
-        # 127.0.0.1:1082) would otherwise intercept localhost calls and return
-        # empty 5xx, causing JSONDecodeError downstream.
-        async with httpx.AsyncClient(timeout=120, trust_env=False) as client:
-            res = await client.post(
-                f"{base}/api/external/transcripts/import",
-                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-                json=payload,
-            )
-        data = res.json()
-        if res.status_code >= 400 or not data.get("ok"):
-            raise RuntimeError(f"HTTP {res.status_code}: {data.get('error') or data.get('diagnostic') or res.text[:300]}")
-        result = data.get("data") or {}
-        auto_link = result.get("autoLink") or {}
-        selected = auto_link.get("selected") if isinstance(auto_link, dict) else None
-        candidates = auto_link.get("candidates") if isinstance(auto_link, dict) else []
-        relation_obj = selected or (payload.get("relations") or [None])[0]
-        relation_status = "unlinked"
-        if relation_obj:
-            relation_status = "auto_linked" if relation_obj.get("source") == "AI_AUTO" else "linked"
-        elif candidates:
-            relation_status = "suggested"
-        recording_url = f"{base}{result.get('recordingUrl')}" if result.get("recordingUrl") else None
-        minute_url = f"{base}{result.get('minuteUrl')}" if result.get("minuteUrl") else None
-        with db() as conn:
-            conn.execute(
-                """
-                update recordings
-                set crm_sync_status = ?,
-                    crm_sync_error = null,
-                    crm_synced_at = ?,
-                    crm_recording_id = ?,
-                    crm_minute_id = ?,
-                    crm_recording_url = ?,
-                    crm_minute_url = ?,
-                    crm_relation_status = ?,
-                    crm_relation_source = ?,
-                    crm_relation_confidence = ?,
-                    crm_relation_target_type = ?,
-                    crm_relation_target_id = ?,
-                    crm_relation_target_name = ?,
-                    crm_sync_response = ?,
-                    updated_at = ?
-                where id = ?
-                """,
-                (
-                    "synced",
-                    now(),
-                    result.get("recordingId"),
-                    result.get("minuteId"),
-                    recording_url,
-                    minute_url,
-                    relation_status,
-                    relation_obj.get("source") if relation_obj else None,
-                    relation_obj.get("confidence") if relation_obj else None,
-                    relation_obj.get("targetType") if relation_obj else None,
-                    relation_obj.get("targetId") if relation_obj else None,
-                    relation_obj.get("targetName") if relation_obj else None,
-                    json.dumps(data, ensure_ascii=False),
-                    now(),
-                    recording_id,
-                ),
-            )
-            audit(conn, user, "crm", f"同步录音到 NewCRM：{rec['title']}，关联状态 {relation_status}。")
-
-        # 把「对话情绪分析」作为同一录音下的独立文档一并同步（存在才发）。失败不影响主纪要。
-        with db() as conn:
-            emotion = current_emotion_analysis(conn, recording_id)
-            emo_payload = build_newcrm_emotion_payload(conn, rec, user, emotion) if emotion else None
-        if emo_payload:
-            try:
-                async with httpx.AsyncClient(timeout=120, trust_env=False) as client:
-                    eres = await client.post(
-                        f"{base}/api/external/transcripts/import",
-                        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-                        json=emo_payload,
-                    )
-                edata = eres.json()
-                if eres.status_code < 400 and edata.get("ok"):
-                    eresult = edata.get("data") or {}
-                    emo_url = f"{base}{eresult.get('minuteUrl')}" if eresult.get("minuteUrl") else None
-                    with db() as conn:
-                        conn.execute(
-                            "update recordings set crm_emotion_id = ?, crm_emotion_url = ?, updated_at = ? where id = ?",
-                            (eresult.get("minuteId"), emo_url, now(), recording_id),
-                        )
-                    data.setdefault("data", {})["emotionUrl"] = emo_url
-            except Exception:
-                # 情绪文档是附加项；同步失败不影响已成功的主纪要同步。
-                pass
-        return data
-    except Exception as exc:
-        with db() as conn:
-            conn.execute(
-                """
-                update recordings
-                set crm_sync_status = ?, crm_sync_error = ?, crm_sync_response = ?, updated_at = ?
-                where id = ?
-                """,
-                ("failed", str(exc), json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False), now(), recording_id),
-            )
-            audit(conn, user, "crm", f"同步录音到 NewCRM 失败：{rec['title']}。")
-        if raise_on_error:
-            raise HTTPException(status_code=502, detail=f"NewCRM sync failed: {exc}") from exc
-        return {"ok": False, "error": str(exc)}
-
-
-async def search_newcrm_opportunities(q: str, user: dict[str, Any]) -> list[dict[str, Any]]:
-    base, token = newcrm_config()
-    if not base or not token:
-        raise HTTPException(status_code=503, detail="NewCRM sync is not configured")
-    # 业务管理员（org-wide，managed_team_ids 含 "*"）搜全部商机，不限本人 ownerAccount；
-    # 普通成员仍只搜自己名下的商机。
-    owner_account = "" if "*" in managed_team_ids(user) else newcrm_owner_account(user)
-    params: dict[str, Any] = {"q": q}
-    if owner_account:
-        params["ownerAccount"] = owner_account
-    # trust_env=False — same reason as sync_recording_to_newcrm above.
-    async with httpx.AsyncClient(timeout=30, trust_env=False) as client:
-        res = await client.get(
-            f"{base}/api/external/opportunities/search",
-            params=params,
-            headers={"Authorization": f"Bearer {token}"},
-        )
-    data = res.json()
-    if res.status_code >= 400 or not data.get("ok"):
-        raise HTTPException(status_code=502, detail=data.get("error") or data.get("diagnostic") or "NewCRM opportunity search failed")
-    return (data.get("data") or {}).get("candidates") or []
-
-
 async def _deepseek_post_with_retry(
     client: httpx.AsyncClient,
     url: str,
@@ -2646,7 +2206,17 @@ async def _deepseek_post_with_retry(
             break
         if res.status_code < 400:
             data = res.json()
-            return data["choices"][0]["message"]["content"]
+            choice = data["choices"][0]
+            message = choice.get("message") or {}
+            content = (message.get("content") or "").strip()
+            if not content:
+                reasoning_chars = len(message.get("reasoning_content") or "")
+                finish_reason = choice.get("finish_reason") or "unknown"
+                raise RuntimeError(
+                    "LLM returned empty content "
+                    f"(finish_reason={finish_reason}, reasoning_chars={reasoning_chars})"
+                )
+            return content
         last_error = f"HTTP {res.status_code}: {res.text[:500]}"
         if res.status_code in {408, 409, 425, 429, 500, 502, 503, 504} and attempt < attempts - 1:
             await asyncio.sleep(2 * (attempt + 1))
@@ -2671,7 +2241,7 @@ async def call_deepseek_summary(text: str, rec: dict[str, Any]) -> tuple[str, st
             payload = {
                 "model": model,
                 "temperature": 0.2,
-                "max_tokens": env_int("NEWVOICE_SUMMARY_CHUNK_MAX_TOKENS", 4096, 1200, 8192),
+                "max_tokens": env_int("NEWVOICE_SUMMARY_CHUNK_MAX_TOKENS", 8192, 1200, 8192),
                 "messages": [
                     {
                         "role": "system",
@@ -2706,6 +2276,8 @@ async def call_deepseek_summary(text: str, rec: dict[str, Any]) -> tuple[str, st
                     },
                 ],
             }
+            if "deepseek" in base.lower() or model.lower().startswith("deepseek"):
+                payload["thinking"] = {"type": "disabled"}
             partials.append(await _deepseek_post_with_retry(client, chat_url, api_key, payload))
 
         final_payload = {
@@ -2721,7 +2293,7 @@ async def call_deepseek_summary(text: str, rec: dict[str, Any]) -> tuple[str, st
                         "重要：转写里的公司/项目/人名可能被语音识别带偏或张冠李戴——突兀的长全称"
                         "（尤其含“有限公司/集团”且只出现一两次的）不要当成标准项目名，优先用口语高频的简称；"
                         "同一项目出现多个候选名时取最一致的那个；项目归属（谁负责/哪个客户）拿不准就标“疑似”，绝不硬编。"
-                        "禁止输出或提及行动项、待办、下一步、风险、客户需求、CRM 跟进模块。"
+                        "禁止输出或提及行动项、待办、下一步、风险、客户需求或外部跟进模块。"
                     ),
                 },
                 {
@@ -2746,6 +2318,8 @@ async def call_deepseek_summary(text: str, rec: dict[str, Any]) -> tuple[str, st
                 },
             ],
         }
+        if "deepseek" in base.lower() or model.lower().startswith("deepseek"):
+            final_payload["thinking"] = {"type": "disabled"}
         return await _deepseek_post_with_retry(client, chat_url, api_key, final_payload), model
 
 
@@ -2775,7 +2349,7 @@ async def call_deepseek_revision(instruction: str, base_summary: str, transcript
                     "你是企业内部会议纪要助手。根据用户修改要求重写完整 Markdown 纪要。"
                     "保持信息丰富、结构清楚、可追溯；只基于原纪要和转写文本，不编造事实。"
                     "转写里的公司/项目/人名可能被语音识别带偏——突兀的长全称不要当标准名、优先口语简称，归属拿不准标“疑似”。"
-                    "禁止输出或提及行动项、待办、下一步、风险、客户需求、CRM 跟进模块。"
+                    "禁止输出或提及行动项、待办、下一步、风险、客户需求或外部跟进模块。"
                 ),
             },
             {
@@ -2795,6 +2369,8 @@ async def call_deepseek_revision(instruction: str, base_summary: str, transcript
             },
         ],
     }
+    if "deepseek" in base.lower() or model.lower().startswith("deepseek"):
+        payload["thinking"] = {"type": "disabled"}
     async with httpx.AsyncClient(timeout=180, trust_env=False) as client:
         content = await _deepseek_post_with_retry(client, f"{base}/chat/completions", api_key, payload)
     return content, model
@@ -2839,8 +2415,6 @@ async def summarize_recording(recording_id: str, user: dict[str, Any]) -> dict[s
             )
             update_task(conn, task_id, "done", 100)
             audit(conn, user, "summary", f"生成会议纪要：{rec['title']}，模型 {model}。")
-        if env_bool("NEWCRM_AUTO_SYNC", True):
-            await sync_recording_to_newcrm(recording_id, user, raise_on_error=False)
         return {"recording_id": recording_id, "model": model, "summary_id": summary_id, "version": version}
     except Exception as exc:
         with db() as conn:
@@ -2898,8 +2472,6 @@ async def revise_summary(recording_id: str, instruction: str, user: dict[str, An
             )
             update_task(conn, task_id, "done", 100)
             audit(conn, user, "summary", f"按自然语言要求修改纪要：{rec['title']}，版本 v{version}。")
-        if env_bool("NEWCRM_AUTO_SYNC", True):
-            await sync_recording_to_newcrm(recording_id, user, raise_on_error=False)
         return {"recording_id": recording_id, "model": model, "summary_id": summary_id, "version": version}
     except Exception as exc:
         with db() as conn:
@@ -3146,7 +2718,7 @@ def call_deepseek_emotion(annotated_transcript: str, rec: dict[str, Any], acoust
                     "“（声学:情绪+置信）”来自语音情绪模型，是辅助证据，要结合说话内容判断，不要照搬数字。"
                     "重点突出情绪本身：整体氛围松紧、各方参与度、是否有防御 / 抵触 / 不耐烦 / 敷衍 / 热情，以及客户的购买意向信号和异议顾虑。"
                     "只基于转写内容，不编造；不确定的写“疑似”。"
-                    "严禁输出行动项、待办、下一步、跟进建议或任何 CRM 模块——这是情绪分析，不是会议纪要。"
+                    "严禁输出行动项、待办、下一步、跟进建议或任何外部业务模块——这是情绪分析，不是会议纪要。"
                 ),
             },
             {
@@ -3167,6 +2739,8 @@ def call_deepseek_emotion(annotated_transcript: str, rec: dict[str, Any], acoust
             },
         ],
     }
+    if "deepseek" in base.lower() or model.lower().startswith("deepseek"):
+        payload["thinking"] = {"type": "disabled"}
     chat_url = f"{base}/chat/completions"
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     last_err: Any = None
@@ -3180,7 +2754,16 @@ def call_deepseek_emotion(annotated_transcript: str, rec: dict[str, Any], acoust
                     continue
                 if res.status_code >= 400:
                     raise RuntimeError(f"DeepSeek HTTP {res.status_code}: {res.text[:300]}")
-                return res.json()["choices"][0]["message"]["content"], model
+                choice = res.json()["choices"][0]
+                message = choice.get("message") or {}
+                content = (message.get("content") or "").strip()
+                if not content:
+                    raise RuntimeError(
+                        "LLM returned empty content "
+                        f"(finish_reason={choice.get('finish_reason') or 'unknown'}, "
+                        f"reasoning_chars={len(message.get('reasoning_content') or '')})"
+                    )
+                return content, model
             except httpx.RequestError as exc:
                 last_err = exc
                 time.sleep(1.5 * (attempt + 1))
@@ -3382,7 +2965,6 @@ def me(user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
 def _settings_view() -> dict[str, Any]:
     api_key, base, model = get_llm_config()
     provider = get_llm_provider()
-    crm_base, crm_token = newcrm_config()
     return {
         "llm_configured": bool(api_key),
         "llm_api_base": base,
@@ -3392,9 +2974,6 @@ def _settings_view() -> dict[str, Any]:
         "deepseek_configured": bool(api_key),
         "deepseek_api_base": base,
         "deepseek_model": model,
-        # NewCRM / Orchisky CRM 同步配置（纪要回写、关联项目）。token 不回显。
-        "crm_base_url": crm_base,
-        "crm_configured": bool(crm_base and crm_token),
     }
 
 
@@ -3437,18 +3016,10 @@ def patch_settings(
     if "llm_provider" in payload:
         updates["llm_provider"] = (payload.get("llm_provider") or "").strip()
 
-    # NewCRM / Orchisky CRM 同步配置（纪要回写、关联项目）。
-    crm_base = _pick("newcrm_base_url", "crm_base_url")
-    if crm_base is not None:
-        updates["newcrm_base_url"] = crm_base.rstrip("/")
-    crm_token = _pick("newcrm_token", "crm_token")
-    if crm_token is not None:
-        updates["newcrm_token"] = crm_token
-
     if updates:
         save_user_config(updates)
         with db() as conn:
-            audit(conn, user, "settings.update", f"{user['name']} 更新了系统配置（大模型 / CRM）。")
+            audit(conn, user, "settings.update", f"{user['name']} 更新了大模型配置。")
     return _settings_view()
 
 
@@ -4273,38 +3844,31 @@ def recording_detail(recording_id: str, user: dict[str, Any] = Depends(current_u
             "tasks": tasks,
             "outputs": outputs,
             "hotword_package": hotword_package,
-            "crm_sync": crm_sync_payload(rec_payload),
+            # Compatibility for browser tabs that loaded the pre-removal
+            # frontend bundle. That bundle dereferences crm_sync.synced_at
+            # while rendering a recording detail page. Keep this inert,
+            # read-only shape until those tabs have naturally refreshed; no
+            # CRM configuration, search, sync, or write route is restored.
+            "crm_sync": {
+                "status": "not_configured",
+                "error": None,
+                "synced_at": None,
+                "recording_id": None,
+                "minute_id": None,
+                "recording_url": None,
+                "minute_url": None,
+                "emotion_id": None,
+                "emotion_url": None,
+                "relation_status": None,
+                "relation_source": None,
+                "relation_confidence": None,
+                "relation_target_type": None,
+                "relation_target_id": None,
+                "relation_target_name": None,
+                "selected": None,
+                "candidates": [],
+            },
         }
-
-
-@app.post("/api/recordings/{recording_id}/crm/sync")
-async def sync_recording_crm_api(
-    recording_id: str,
-    payload: dict[str, Any] | None = Body(default=None),
-    user: dict[str, Any] = Depends(current_user),
-) -> dict[str, Any]:
-    payload = payload or {}
-    relation = payload.get("relation") if isinstance(payload, dict) else None
-    if relation:
-        if not relation.get("targetId"):
-            raise HTTPException(status_code=400, detail="relation.targetId is required")
-        relation = {
-            "targetType": relation.get("targetType") or "OPPORTUNITY",
-            "targetId": relation.get("targetId"),
-            "targetName": relation.get("targetName"),
-            "confidence": relation.get("confidence") or 1,
-        }
-    return await sync_recording_to_newcrm(recording_id, user, relation=relation, raise_on_error=True)
-
-
-@app.get("/api/crm/opportunities/search")
-async def crm_opportunities_search(
-    q: str = Query(""),
-    user: dict[str, Any] = Depends(current_user),
-) -> dict[str, Any]:
-    if user["role"] == "admin":
-        raise HTTPException(status_code=403, detail="admin console has no CRM sync")
-    return {"candidates": await search_newcrm_opportunities(q.strip(), user) if q.strip() else []}
 
 
 @app.get("/api/recordings/{recording_id}/audio")
@@ -4421,7 +3985,7 @@ def hotwords(
 
 # ---------------------------------------------------------------------------
 # 个人手填热词 —— 对齐 aham-voice 开源版的「一个大文本框」体验。
-# 多用户语义:个人热词按 owner_id 作用域(每个用户独立一套),不触碰团队/CRM/企微
+# 多用户语义：个人热词按 owner_id 作用域（每个用户独立一套），不触碰外部同步热词。
 # 同步进来的热词(其它 source)。前端富文本框用顿号「、」分隔,GET words 与 PUT
 # 的读写范围保持一致,保证无损 round-trip。
 # ---------------------------------------------------------------------------
@@ -4479,7 +4043,7 @@ def create_hotword(payload: dict[str, Any], user: dict[str, Any] = Depends(curre
 @app.put("/api/hotwords")
 def save_all_hotwords(payload: dict[str, Any], user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
     """全量覆盖当前用户的个人热词(只删/建 owner_id=本人 且 source='manual' 的行,
-    团队/CRM/企微同步热词不受影响)。"""
+    团队及外部同步热词不受影响)。"""
     raw_words = payload.get("words")
     if not isinstance(raw_words, list):
         raise HTTPException(status_code=400, detail="words 必须是字符串数组")

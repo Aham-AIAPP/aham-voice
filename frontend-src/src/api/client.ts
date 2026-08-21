@@ -78,7 +78,7 @@ api.interceptors.response.use(
 
 // Pull a readable error message off whatever axios throws. The backend always
 // returns `{ detail: string }` from HTTPException, but we also handle the
-// CRM-style `{ ok: false, error, diagnostic }` shape and bare strings.
+// Supports structured `{ ok: false, error, diagnostic }` responses and bare strings.
 export function readApiError(err: unknown): string {
   if (axios.isAxiosError(err)) {
     const data = err.response?.data as

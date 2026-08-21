@@ -68,7 +68,7 @@ export function RecordingsList() {
     <div className="page-body page--object-index">
       <PageHead
         title="录音库"
-        subtitle={`当前 ${totalLabel}。点开任一条进入逐字稿、纪要、说话人和 CRM 关联视图。`}
+        subtitle={`当前 ${totalLabel}。点开任一条进入逐字稿、纪要和说话人视图。`}
         actions={
           <Button variant="primary" onClick={() => navigate("/app/recordings/new")}>
             <Icon name="upload" size={14} /> 上传录音
@@ -142,7 +142,6 @@ export function RecordingsList() {
                 <th className="col-fit">时长</th>
                 <th className="col-fit">负责人</th>
                 <th className="col-fit">状态</th>
-                <th className="col-fit">CRM</th>
                 <th className="col-fit">更新</th>
                 <th className="col-fit"></th>
               </tr>
@@ -150,27 +149,6 @@ export function RecordingsList() {
             <tbody>
               {filtered.map((rec) => {
                 const overall = overallStatus(rec);
-                const crm = rec.crm_sync_status;
-                const crmTone =
-                  crm === "synced"
-                    ? "moss"
-                    : crm === "syncing"
-                      ? "accent"
-                      : crm === "failed"
-                        ? "rust"
-                        : crm === "not_configured"
-                          ? "amber"
-                          : "muted";
-                const crmLabel =
-                  crm === "synced"
-                    ? "已同步"
-                    : crm === "syncing"
-                      ? "同步中"
-                      : crm === "failed"
-                        ? "失败"
-                        : crm === "not_configured"
-                          ? "未配置"
-                          : "—";
                 return (
                   <tr key={rec.id} onClick={() => navigate(`/app/recordings/${rec.id}`)} className="u-pointer">
                     <td>
@@ -190,9 +168,6 @@ export function RecordingsList() {
                           纪要 {statusLabel(rec.summary_status)}
                         </span>
                       )}
-                    </td>
-                    <td>
-                      <Status tone={crmTone as React.ComponentProps<typeof Status>["tone"]}>{crmLabel}</Status>
                     </td>
                     <td className="meta">{formatRelative(rec.updated_at)}</td>
                     <td>

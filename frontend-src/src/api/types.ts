@@ -49,13 +49,6 @@ export type RecordingProcessingStatus =
   | "done"
   | "failed";
 
-export type CrmSyncStatus =
-  | "pending"
-  | "syncing"
-  | "synced"
-  | "failed"
-  | "not_configured";
-
 export interface Recording {
   id: string;
   title: string;
@@ -70,18 +63,6 @@ export interface Recording {
   duration_label: string;
   asr_status: RecordingProcessingStatus;
   summary_status: RecordingProcessingStatus;
-  crm_sync_status: CrmSyncStatus;
-  crm_sync_error: string | null;
-  crm_synced_at: string | null;
-  crm_recording_id: string | null;
-  crm_minute_id: string | null;
-  crm_recording_url: string | null;
-  crm_minute_url: string | null;
-  crm_relation_status: string | null;
-  crm_relation_source: string | null;
-  crm_relation_target_type: string | null;
-  crm_relation_target_id: string | null;
-  crm_relation_target_name: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -184,9 +165,6 @@ export interface Settings {
   deepseek_configured?: boolean;
   deepseek_api_base?: string;
   deepseek_model?: string;
-  // Orchisky CRM 同步（纪要回写、关联项目）。token 不回显。
-  crm_base_url?: string;
-  crm_configured?: boolean;
 }
 
 export interface LlmTestResult {
@@ -315,26 +293,6 @@ export interface HotwordPackage {
   created_at: string;
 }
 
-export interface CrmSync {
-  status: CrmSyncStatus;
-  error: string | null;
-  synced_at: string | null;
-  recording_id: string | null;
-  minute_id: string | null;
-  recording_url: string | null;
-  minute_url: string | null;
-  emotion_id: string | null;
-  emotion_url: string | null;
-  relation_status: string | null;
-  relation_source: string | null;
-  relation_confidence: number | null;
-  relation_target_type: string | null;
-  relation_target_id: string | null;
-  relation_target_name: string | null;
-  selected: unknown;
-  candidates: unknown[];
-}
-
 export interface EmotionAnalysis {
   id: string;
   recording_id: string;
@@ -367,19 +325,4 @@ export interface RecordingDetail {
     version?: number;
   }>;
   hotword_package: HotwordPackage | null;
-  crm_sync: CrmSync;
-}
-
-export interface OpportunityCandidate {
-  targetType: string;
-  targetId: string;
-  targetName: string;
-  customerName?: string | null;
-  billNo?: string | null;
-  responsibleName?: string | null;
-  status?: string | null;
-  stage?: string | null;
-  industry?: string | null;
-  requirementPreview?: string | null;
-  confidence: number;
 }

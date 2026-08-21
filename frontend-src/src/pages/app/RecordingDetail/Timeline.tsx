@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { cn } from "@/utils/cn";
 import { formatRelative } from "@/utils/format";
-import type { Recording, RecordingTask, Summary, CrmSync, TranscriptSegment, EmotionAnalysis } from "@/api/types";
+import type { Recording, RecordingTask, Summary, TranscriptSegment, EmotionAnalysis } from "@/api/types";
 import { EMOTION_KEY } from "./Preview";
 
 type Tone = "moss" | "accent" | "rust" | "amber" | "muted";
@@ -38,14 +38,12 @@ interface Props {
   tasks: RecordingTask[];
   summaries: Summary[];
   segments: TranscriptSegment[];
-  crmSync: CrmSync;
   emotion: EmotionAnalysis | null;
   onPreviewSummary: (summaryId: string) => void;
   onPreviewTranscript: () => void;
   onPreviewEmotion: () => void;
   onGenerateEmotion: () => void;
   emotionPending: boolean;
-  onOpenCrm: () => void;
 }
 
 function taskTone(status: RecordingTask["status"]): Tone {
@@ -63,27 +61,12 @@ function taskTone(status: RecordingTask["status"]): Tone {
   }
 }
 
-function crmTone(status: CrmSync["status"]): Tone {
-  switch (status) {
-    case "synced":
-      return "moss";
-    case "syncing":
-      return "accent";
-    case "failed":
-      return "rust";
-    case "not_configured":
-      return "amber";
-    default:
-      return "muted";
-  }
-}
-
 function isTranscribeStep(step: string): boolean {
   return /VAD|转写/.test(step);
 }
 
 function buildEvents(props: Props): TimelineEvent[] {
-  const { recording: rec, tasks, summaries, segments, crmSync, emotion, onPreviewSummary, onPreviewTranscript, onPreviewEmotion, onGenerateEmotion, emotionPending, onOpenCrm } = props;
+  const { recording: rec, tasks, summaries, segments, emotion, onPreviewSummary, onPreviewTranscript, onPreviewEmotion, onGenerateEmotion, emotionPending } = props;
   const events: TimelineEvent[] = [];
 
   events.push({
@@ -199,24 +182,6 @@ function buildEvents(props: Props): TimelineEvent[] {
     });
   }
 
-  if (crmSync.synced_at || crmSync.status === "failed") {
-    const targetText = crmSync.relation_target_name
-      ? `关联 ${crmSync.relation_target_name}`
-      : crmSync.error
-        ? `错误：${crmSync.error.slice(0, 80)}`
-        : crmSync.status === "not_configured"
-          ? "Orchisky CRM 同步未配置"
-          : "未关联";
-    events.push({
-      id: "crm",
-      at: crmSync.synced_at || rec.updated_at,
-      title: "同步到 Orchisky CRM",
-      detail: targetText,
-      tone: crmTone(crmSync.status),
-      onClick: onOpenCrm,
-    });
-  }
-
   // Stable timestamp sort with a type-priority tiebreaker so events sharing
   // the same second still render in the canonical pipeline order.
   const TYPE_ORDER: Record<string, number> = {
@@ -226,7 +191,6 @@ function buildEvents(props: Props): TimelineEvent[] {
     transcript: 3,
     summary: 4,
     emotion: 5,
-    crm: 6,
   };
   events.sort((a, b) => {
     const t = a.at.localeCompare(b.at);

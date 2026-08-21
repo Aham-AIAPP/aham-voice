@@ -16,9 +16,6 @@ import { Timeline } from "./Timeline";
 import { Preview, TRANSCRIPT_KEY, EMOTION_KEY, summaryArtifactKey, type ArtifactKey } from "./Preview";
 import { ReviseComposer } from "./ReviseComposer";
 import { Drawer } from "./Drawer";
-import { CrmPanel } from "./CrmPanel";
-
-type DrawerKind = "crm" | null;
 
 function overallTone(asr: string, summary: string): React.ComponentProps<typeof Status>["tone"] {
   if (asr === "failed" || summary === "failed") return "rust";
@@ -70,7 +67,6 @@ export function RecordingDetail() {
       const active =
         rec.asr_status === "running" ||
         rec.summary_status === "running" ||
-        rec.crm_sync_status === "syncing" ||
         taskActive;
       return active ? 4000 : false;
     },
@@ -94,7 +90,6 @@ export function RecordingDetail() {
 
   // 预览选择。null = 抽屉关闭（默认）。预览以浮出抽屉形式展示（非内嵌分栏）。
   const [previewKey, setPreviewKey] = useState<ArtifactKey | null>(null);
-  const [drawer, setDrawer] = useState<DrawerKind>(null);
 
   const summaries = detail.data?.summaries ?? [];
   const currentSummary = useMemo(
@@ -131,7 +126,7 @@ export function RecordingDetail() {
   }
   if (!detail.data) return <EmptyState description="没有这条录音。" />;
 
-  const { recording: rec, segments, tasks, hotword_package: pkg, crm_sync, emotion_analysis: emotionAnalysis } = detail.data;
+  const { recording: rec, segments, tasks, hotword_package: pkg, emotion_analysis: emotionAnalysis } = detail.data;
   const emotionRunning = tasks.some(
     (t) => t.step.includes("情绪") && (t.status === "running" || t.status === "queued"),
   );
@@ -204,14 +199,12 @@ export function RecordingDetail() {
             tasks={tasks}
             summaries={summaries}
             segments={segments}
-            crmSync={crm_sync}
             emotion={emotionAnalysis}
             onPreviewSummary={(summaryId) => setPreviewKey(`summary:${summaryId}`)}
             onPreviewTranscript={() => setPreviewKey(TRANSCRIPT_KEY)}
             onPreviewEmotion={() => setPreviewKey(EMOTION_KEY)}
             onGenerateEmotion={() => emotionMut.mutate()}
             emotionPending={emotionMut.isPending || emotionRunning}
-            onOpenCrm={() => setDrawer("crm")}
             activePreviewKey={previewKey}
           />
         </div>
@@ -243,20 +236,6 @@ export function RecordingDetail() {
             onClose={() => setPreviewKey(null)}
           />
         )}
-      </Drawer>
-
-      {/* ───────────────── Drawers ───────────────── */}
-      <Drawer
-        open={drawer === "crm"}
-        onClose={() => setDrawer(null)}
-        title="Orchisky CRM 同步"
-        subtitle={rec.title}
-      >
-        <CrmPanel
-          recordingId={recordingId}
-          crm={crm_sync}
-          summaryStatus={rec.summary_status}
-        />
       </Drawer>
     </>
   );

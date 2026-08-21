@@ -150,7 +150,7 @@ export function RecordingNew() {
           </select>
         </FormRow>
 
-        <FormRow label="客户 / 项目" optional htmlFor="rec-tag" hint="自由文本。会写入摘要侧栏与 CRM 关联候选。">
+        <FormRow label="客户 / 项目" optional htmlFor="rec-tag" hint="自由文本，用于标记和检索录音。">
           <Field
             id="rec-tag"
             value={tag}

@@ -22,7 +22,7 @@ interface Provider {
 }
 
 const PROVIDERS: Provider[] = [
-  { key: "deepseek", label: "DeepSeek", base: "https://api.deepseek.com", modelPlaceholder: "deepseek-v4-pro" },
+  { key: "deepseek", label: "DeepSeek", base: "https://api.deepseek.com", modelPlaceholder: "deepseek-v4-flash" },
   { key: "openai", label: "OpenAI", base: "https://api.openai.com/v1", modelPlaceholder: "gpt-4o" },
   { key: "qwen", label: "通义千问 Qwen", base: "https://dashscope.aliyuncs.com/compatible-mode/v1", modelPlaceholder: "qwen-plus" },
   { key: "moonshot", label: "Moonshot Kimi", base: "https://api.moonshot.cn/v1", modelPlaceholder: "moonshot-v1-8k" },
@@ -50,11 +50,6 @@ export function AdminSettings() {
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
-  // CRM（纪要回写 / 关联项目）配置
-  const [crmBase, setCrmBase] = useState("");
-  const [crmToken, setCrmToken] = useState("");
-  const [crmError, setCrmError] = useState<string | null>(null);
-  const [crmInfo, setCrmInfo] = useState<string | null>(null);
 
   useEffect(() => {
     if (settings.data) {
@@ -68,24 +63,8 @@ export function AdminSettings() {
           ? (stored as ProviderKey)
           : providerForBase(base),
       );
-      setCrmBase(settings.data.crm_base_url ?? "");
     }
   }, [settings.data]);
-
-  const saveCrm = useMutation({
-    mutationFn: () =>
-      patchSettings({
-        newcrm_base_url: crmBase.trim(),
-        ...(crmToken.trim() ? { newcrm_token: crmToken.trim() } : {}),
-      }),
-    onSuccess: (data) => {
-      setCrmToken("");
-      setCrmInfo("已保存。生成纪要后可在录音详情页同步到 Orchisky CRM 并关联项目/商机。");
-      setCrmError(null);
-      qc.setQueryData<SettingsData>(["settings"], data);
-    },
-    onError: (err) => { setCrmError(readApiError(err)); setCrmInfo(null); },
-  });
 
   const onPickProvider = (key: ProviderKey) => {
     setProvider(key);
@@ -155,7 +134,7 @@ export function AdminSettings() {
     <div className="page-body page--object-index">
       <PageHead
         title="系统配置"
-        subtitle={`大模型（会议纪要 / 情绪分析）与 Orchisky CRM 同步。大模型当前：${configured ? `已配置（${activePreset?.label ?? "自定义"}）` : "未配置"}。`}
+        subtitle={`大模型用于会议纪要和情绪分析。当前：${configured ? `已配置（${activePreset?.label ?? "自定义"}）` : "未配置"}。`}
       />
 
       <section className="card u-p-5 u-flex u-col u-gap-4 set-form-card">
@@ -236,52 +215,6 @@ export function AdminSettings() {
 
         {error && <Diag code="SET_E">{error}</Diag>}
         {info && <Diag code="SET_OK" tone="info">{info}</Diag>}
-      </section>
-
-      <section className="card u-p-5 u-mt-5 u-flex u-col u-gap-4 set-form-card">
-        <div className="u-row-between">
-          <h3 className="form-section__title u-m-0">Orchisky CRM 同步</h3>
-          <Status tone={settings.data?.crm_configured ? "moss" : "muted"}>
-            {settings.data?.crm_configured ? "已配置" : "未配置"}
-          </Status>
-        </div>
-
-        <p className="meta u-m-0 u-fs-xs">
-          配置后，录音详情页可把会议纪要回写到 Orchisky CRM 并关联项目 / 商机。地址填到域名即可，导入 token 只存本机服务端、不回显。
-        </p>
-
-        <FormRow label="CRM 地址">
-          <Field
-            type="text"
-            placeholder="https://your-crm-host"
-            value={crmBase}
-            onChange={(e) => setCrmBase(e.target.value)}
-          />
-        </FormRow>
-
-        <FormRow label="导入 Token" hint="CRM 侧的 LOCAL_TRANSCRIPT_IMPORT_TOKEN。">
-          <Field
-            type="password"
-            placeholder={settings.data?.crm_configured ? "已配置（留空则保持不变）" : "粘贴导入 token"}
-            value={crmToken}
-            onChange={(e) => setCrmToken(e.target.value)}
-            autoComplete="off"
-          />
-        </FormRow>
-
-        <div className="u-cluster">
-          <Button
-            variant="primary"
-            size="sm"
-            loading={saveCrm.isPending}
-            onClick={() => { setCrmError(null); setCrmInfo(null); saveCrm.mutate(); }}
-          >
-            <Icon name="save" size={14} /> 保存
-          </Button>
-        </div>
-
-        {crmError && <Diag code="CRM_SET_E">{crmError}</Diag>}
-        {crmInfo && <Diag code="CRM_SET_OK" tone="info">{crmInfo}</Diag>}
       </section>
 
       <ConfirmDialog

@@ -5,7 +5,6 @@ import type {
   LlmTestResult,
   LoginResponse,
   NameSpeakerResult,
-  OpportunityCandidate,
   Recording,
   RecordingDetail,
   RoleMapping,
@@ -116,21 +115,6 @@ export async function generateEmotion(id: string): Promise<{ status: string; rec
   return data;
 }
 
-export async function syncRecordingToCrm(id: string, relation?: {
-  targetType?: string;
-  targetId: string;
-  targetName?: string;
-  confidence?: number;
-}): Promise<unknown> {
-  const { data } = await api.post(`/recordings/${id}/crm/sync`, relation ? { relation } : {});
-  return data;
-}
-
-export async function searchCrmOpportunities(q: string): Promise<{ candidates: OpportunityCandidate[] }> {
-  const { data } = await api.get<{ candidates: OpportunityCandidate[] }>("/crm/opportunities/search", { params: { q } });
-  return data;
-}
-
 export async function fetchSpeakerCandidates(id: string): Promise<SpeakerCandidate[]> {
   const { data } = await api.get<SpeakerCandidate[]>(`/recordings/${id}/speaker-candidates`);
   return data;
@@ -147,7 +131,7 @@ export async function renameSpeaker(recordingId: string, speaker: string, payloa
 // -------- hotwords（仅保留个人手填热词；表格版/在线更新已移除）--------
 
 // 个人热词（对齐 aham-voice 富文本框）：读/写当前用户全部个人热词，无损 round-trip。
-// 注：热词「在线更新」（CRM/企微同步、重算评分、同步状态）功能已整体移除。
+// 注：热词「在线更新」（外部同步、重算评分、同步状态）功能已整体移除。
 export async function fetchAllHotwordWords(): Promise<string[]> {
   const { data } = await api.get<string[]>("/hotwords/words");
   return data;
@@ -170,8 +154,6 @@ export async function patchSettings(payload: {
   llm_api_base?: string;
   llm_model?: string;
   llm_provider?: string;
-  newcrm_base_url?: string;
-  newcrm_token?: string;
 }): Promise<Settings> {
   const { data } = await api.patch<Settings>("/settings", payload);
   return data;

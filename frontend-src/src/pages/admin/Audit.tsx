@@ -19,7 +19,6 @@ const CATEGORIES = [
   { value: "summary", label: "纪要" },
   { value: "hotword", label: "热词" },
   { value: "voiceprint", label: "声纹" },
-  { value: "crm", label: "CRM" },
   { value: "system", label: "系统" },
 ];
 

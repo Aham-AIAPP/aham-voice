@@ -19,20 +19,24 @@ import { AdminVoiceprints } from "@/pages/admin/Voiceprints";
 import { AdminHotwords } from "@/pages/admin/Hotwords";
 import { AdminSettings } from "@/pages/admin/Settings";
 import { NotFound } from "@/pages/NotFound";
+import { AppError } from "@/pages/AppError";
 
 export const router = createBrowserRouter([
   {
     path: "/",
     element: <Navigate to="/app/recordings/new" replace />,
+    errorElement: <AppError />,
   },
   {
     path: "/login",
     element: <AuthShell />,
+    errorElement: <AppError />,
     children: [{ index: true, element: <Login /> }],
   },
   {
     path: "/auth",
     element: <AuthShell />,
+    errorElement: <AppError />,
     children: [
       {
         path: "change-password",
@@ -51,6 +55,7 @@ export const router = createBrowserRouter([
         <AppShell />
       </ProtectedRoute>
     ),
+    errorElement: <AppError />,
     children: [
       { index: true, element: <Navigate to="/app/recordings/new" replace /> },
       { path: "workspace", element: <Navigate to="/app/recordings/new" replace /> },
@@ -68,6 +73,7 @@ export const router = createBrowserRouter([
         <AppShell />
       </ProtectedRoute>
     ),
+    errorElement: <AppError />,
     children: [
       { index: true, element: <Navigate to="/admin/overview" replace /> },
       { path: "overview", element: <AdminOverview /> },

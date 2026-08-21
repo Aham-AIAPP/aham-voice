@@ -553,7 +553,7 @@ select:focus-visible {
 
      .page--split-panel    Left main content + right AI rail. Used when the
                            conversation is *about* a specific business object.
-                           E.g. /crm/leads/南都电源 with an open conversation rail.
+                           E.g. an object detail page with an open conversation rail.
 
    Hard rule: when either template is active, the global .workspace-dock is
    hidden. The page already hosts an AI input; a second one would be a
