@@ -70,6 +70,16 @@ FFMPEG = BASE / "bin" / "ffmpeg"
 FFPROBE = BASE / "bin" / "ffprobe"
 os.environ["PATH"] = f"{BASE / 'bin'}:{os.environ.get('PATH', '')}"
 
+# 推理设备。默认 cpu（macOS 本机部署）；Linux + NVIDIA 部署设 NEWVOICE_ASR_DEVICE=cuda:0
+# 即可让 FunASR 的 ASR / 情绪模型走 GPU。ModelScope 的 speaker_verification
+# pipeline 只认 "cpu" / "gpu"，所以单独映射一层。
+ASR_DEVICE = (os.environ.get("NEWVOICE_ASR_DEVICE") or "cpu").strip()
+
+
+def modelscope_device() -> str:
+    return "gpu" if ASR_DEVICE.startswith("cuda") else "cpu"
+
+
 for path in [APP_DATA, RECORDINGS, EXPORTS, TMP, VOICEPRINTS]:
     path.mkdir(parents=True, exist_ok=True)
 
@@ -1455,7 +1465,7 @@ def get_asr_model() -> Any:
                     vad_kwargs={"max_single_segment_time": int(os.environ.get("NEWVOICE_VAD_MAX_SEGMENT_MS", "30000"))},
                     punc_model=str(PUNC),
                     spk_model=str(CAMPLUS),
-                    device="cpu",
+                    device=ASR_DEVICE,
                     disable_update=True,
                 )
     return _asr_model
@@ -1469,7 +1479,9 @@ def get_speaker_verifier() -> Any:
                 from modelscope.pipelines import pipeline
                 from modelscope.utils.constant import Tasks
 
-                _speaker_verifier = pipeline(task=Tasks.speaker_verification, model=str(CAMPLUS))
+                _speaker_verifier = pipeline(
+                    task=Tasks.speaker_verification, model=str(CAMPLUS), device=modelscope_device()
+                )
     return _speaker_verifier
 
 
@@ -2594,7 +2606,7 @@ def get_emotion_model() -> Any:
                     raise RuntimeError(f"情绪模型缺失：{EMOTION}")
                 from funasr import AutoModel
 
-                _emotion_model = AutoModel(model=str(EMOTION), disable_update=True)
+                _emotion_model = AutoModel(model=str(EMOTION), device=ASR_DEVICE, disable_update=True)
     return _emotion_model
 
 

@@ -41,9 +41,14 @@ python3 scripts/seed_internal.py             # 导入
 
 ## 部署要点
 
-- FunASR / modelscope / torch 体积大，单独建 venv；模型放 `$RECORDING_AI_HOME/models/`。
-- 后端 uvicorn :8000，前端静态服务 :5173，建议 launchd 托管（`com.newvoice.backend` / `com.newvoice.frontend`）。
-- 本机部署的完整步骤、启停、运维见 [`部署说明-本机.md`](部署说明-本机.md)。
+- FunASR / modelscope / torch 体积大，单独建 venv；模型放 `$RECORDING_AI_HOME/models/`（5 个模型约 3.9G）。
+- 依赖分两层：`backend/requirements.txt` 只有 Web 层（fastapi/uvicorn 等 5 个包），
+  **推理侧完整锁定清单在 `backend/requirements-asr.txt`**（111 个包），部署必须用后者。
+- 后端 uvicorn :8000，前端静态服务 :5173。`frontend/dist` 已预构建入库，部署无需 Node。
+- 推理设备由 `NEWVOICE_ASR_DEVICE` 控制：默认 `cpu`；Linux + NVIDIA 设 `cuda:0`。
+- 部署文档：
+  - macOS 本机（launchd）→ [`部署说明-本机.md`](部署说明-本机.md)
+  - Ubuntu 22.04 + GPU（systemd）→ [`部署说明-Ubuntu-GPU.md`](部署说明-Ubuntu-GPU.md)
 
 ## 本次内部改造（2026-06）
 
