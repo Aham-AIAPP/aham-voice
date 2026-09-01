@@ -2,14 +2,18 @@
 """
 Orchisky Voice 内部版种子导入（幂等）。
 
-把 scripts/internal_seed.json 里的**真实用户名**与**热词库**导入本机 sqlite。
+把种子文件里的**真实用户名**与**热词库**导入本机 sqlite。
+
+种子含员工名与客户热词，**不入库**；结构模板见 scripts/internal_seed.example.json。
+查找顺序：--seed <路径> → $INTERNAL_SEED_PATH → $RECORDING_AI_HOME/internal_seed.json。
 - 不含任何密钥/密码：用户密码统一用 NEWVOICE_INITIAL_PASSWORD（默认 orchisky888888），
   must_change_password=1（首次登录强制改）；邮箱按 <username>@orchisky.cn 合成。
 - 幂等：用户按 username、热词按 (word, owner) 去重，已存在则跳过；可反复运行。
 
 用法：
-    python3 scripts/seed_internal.py            # 导入
-    python3 scripts/seed_internal.py --dry-run  # 只看会做什么，不写库
+    python3 scripts/seed_internal.py                    # 导入（种子取自数据目录）
+    python3 scripts/seed_internal.py --dry-run         # 只看会做什么，不写库
+    python3 scripts/seed_internal.py --seed ~/x.json   # 指定种子文件
 
 DB 路径与后端一致：$RECORDING_AI_HOME/app-data/newvoice.sqlite3
 （RECORDING_AI_HOME 默认 ~/.cache/recording-ai；本机部署指向 AhamVoice 数据目录）。
@@ -26,8 +30,21 @@ from pathlib import Path
 
 BASE = Path(os.environ.get("RECORDING_AI_HOME", Path.home() / ".cache" / "recording-ai"))
 DB_PATH = BASE / "app-data" / "newvoice.sqlite3"
-SEED_PATH = Path(__file__).resolve().parent / "internal_seed.json"
 DRY = "--dry-run" in sys.argv
+
+
+def seed_path() -> Path:
+    # 真实种子含员工名与客户热词，不入版本库；默认放数据目录，与 sqlite / 录音同处。
+    if "--seed" in sys.argv:
+        i = sys.argv.index("--seed") + 1
+        if i >= len(sys.argv):
+            print("✗ --seed 后面要跟种子文件路径。")
+            raise SystemExit(2)
+        return Path(sys.argv[i]).expanduser()
+    env = os.environ.get("INTERNAL_SEED_PATH")
+    if env:
+        return Path(env).expanduser()
+    return BASE / "internal_seed.json"
 
 
 def initial_password() -> str:
@@ -50,7 +67,15 @@ def main() -> int:
     if not DB_PATH.exists():
         print(f"✗ 找不到数据库：{DB_PATH}\n  先启动一次后端让它建表，或确认 RECORDING_AI_HOME 指向正确目录。")
         return 1
-    seed = json.loads(SEED_PATH.read_text(encoding="utf-8"))
+    src = seed_path()
+    if not src.exists():
+        print(
+            f"✗ 找不到种子文件：{src}\n"
+            "  真实种子（员工名 / 客户热词）不入版本库，请放到上述路径，或用 --seed <路径> 指定。\n"
+            "  结构模板见 scripts/internal_seed.example.json。"
+        )
+        return 1
+    seed = json.loads(src.read_text(encoding="utf-8"))
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
 

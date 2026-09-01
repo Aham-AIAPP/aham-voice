@@ -3,6 +3,9 @@
 .env.local
 .env.*.local
 
+# 内部版种子：真实员工名 + 客户热词，不入库（模板见 scripts/internal_seed.example.json）
+scripts/internal_seed.json
+
 # ---------- Python ----------
 __pycache__/
 *.pyc

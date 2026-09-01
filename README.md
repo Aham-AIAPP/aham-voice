@@ -17,15 +17,19 @@
 | 仓库根 `.env` | `DEEPSEEK_API_KEY`、`RECORDING_AI_HOME` | **否**（.gitignore）|
 | 数据目录 `config.json` | 大模型 Key / Base / Model（管理员在「系统配置」页填）| 否（在 BASE 目录，不在仓库）|
 | 数据目录 `app-data/newvoice.sqlite3` | 用户、录音、纪要、声纹、热词 | 否 |
+| 数据目录 `internal_seed.json` | 内部版种子：员工名 + 客户热词 | 否（.gitignore）|
 
 模板见 `.env.example`。**仓库内不含任何真实密钥 / 密码 / token。**
 
 ## 内部版种子数据（真实用户名 + 热词库）
 
-为方便换机 / 团队部署，真实**用户名**与**热词库**以种子形式入库（不含密码 / 密钥 / 邮箱 / 手机号）：
+真实**用户名**与**热词库**以种子文件形式换机 / 团队部署（不含密码 / 密钥 / 邮箱 / 手机号）。
+种子里是员工名和客户名，**不入版本库**——放数据目录，仓库里只留结构模板：
 
-- `scripts/internal_seed.json` —— 7 个用户（administrator + 6 销售部成员）+ 约 3300 条热词（客户 / 产品 / 行业术语）。
+- `/internal_seed.json` —— 真实种子：7 个用户（administrator + 6 销售部成员）+ 约 3300 条热词（客户 / 产品 / 行业术语）。已在 `.gitignore` 排除。
+- `scripts/internal_seed.example.json` —— 结构模板（假数据），入库。
 - `scripts/seed_internal.py` —— 幂等导入：用户按 `username`、热词按 `(word, owner)` 去重，可反复运行。
+  查找顺序 `--seed <路径>` → `$INTERNAL_SEED_PATH` → `$RECORDING_AI_HOME/internal_seed.json`。
 
 ```bash
 export RECORDING_AI_HOME=...                 # 指向数据目录（含 app-data/newvoice.sqlite3）
