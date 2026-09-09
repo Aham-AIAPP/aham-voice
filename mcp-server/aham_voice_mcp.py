@@ -253,6 +253,20 @@ async def add_hotwords(words: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 @server.tool()
+async def correct_transcript(recording_id: str) -> dict[str, Any]:
+    """重新校对一份已有转写里被听错的专名。
+
+    转写完会自动跑一次。这个工具用于事后补了热词、想让稿子再过一遍的情况——
+    比重新转写便宜得多（几分钟 vs 几十分钟）。
+
+    只改专有名词，不改写内容。模型给出的替换如果在原文里找不到可安全替换的
+    位置（比如 "MS" 只出现在 "WMS" 内部），会被丢弃而不是硬改。
+    返回 {"applied": 已改处数, "proposed": 模型给出的条数, "skipped": 丢弃条数}。
+    """
+    return await _call("POST", f"/api/recordings/{recording_id}/correct")
+
+
+@server.tool()
 async def suggest_hotwords(recording_id: str) -> dict[str, Any]:
     """从一段转写里挖掘该加的热词，以及疑似被听错的专名。
 

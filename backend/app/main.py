@@ -3325,6 +3325,159 @@ def indexed_transcript_text(segments: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def apply_correction(text: str, wrong: str, right: str) -> tuple[str, int]:
+    """Replace `wrong` with `right`, refusing to cut into a longer latin token.
+
+    The model hands back a bare string, and a bare "MS" also lives inside "WMS":
+    a naive replace turns 「所以这个WMS呢」 into 「所以这个WMES呢」. Both such cases
+    in the 42-minute benchmark were this exact shape. When no boundary-safe
+    occurrence exists we drop the suggestion — not changing beats changing wrong.
+    """
+    if not wrong or wrong == right or wrong not in text:
+        return text, 0
+    if wrong[0].isascii() and wrong[0].isalpha():
+        pattern = re.compile(rf"(?<![A-Za-z]){re.escape(wrong)}(?![A-Za-z])")
+        fixed, count = pattern.subn(right, text)
+        return fixed, count
+    count = text.count(wrong)
+    return text.replace(wrong, right), count
+
+
+async def call_llm_transcript_corrections(
+    rec: dict[str, Any], segments: list[dict[str, Any]], terms: list[str]
+) -> list[dict[str, Any]]:
+    """Ask the model which proper nouns the recogniser misheard.
+
+    It returns replacement pairs, never rewritten text — given the chance to
+    rewrite it would also paraphrase and tidy up, and the transcript would stop
+    being a record of what was said. Constrained this way it cannot: measured on
+    a real 42-minute meeting, all 26 proposals quoted text that existed verbatim.
+
+    Why this rather than phonetic distance: 「由你们」 and 「优尼昂」 are near
+    homophones, and only context tells them apart. The phonetic pass got that one
+    wrong; this pass did not, and additionally caught EIPIP→ERP and 进洁→金蝶,
+    which no phonetic rule reaches.
+    """
+    api_key, base, model = get_llm_config()
+    if not api_key:
+        raise RuntimeError("大模型 API Key 未配置")
+
+    numbered = [f"{index}\t{item['text']}" for index, item in enumerate(segments)]
+    window = env_int("AHAMVOICE_CORRECTION_CHUNK_CHARS", 3000, 800, 12000)
+    chunks: list[list[str]] = []
+    current: list[str] = []
+    size = 0
+    for line in numbered:
+        current.append(line)
+        size += len(line)
+        if size >= window:
+            chunks.append(current)
+            current, size = [], 0
+    if current:
+        chunks.append(current)
+
+    system = (
+        "你是语音转写的校对助手。只纠正被听错的专有名词，绝不改写内容、不润色、"
+        "不补标点、不删口语重复。只输出 JSON。"
+    )
+    collected: list[dict[str, Any]] = []
+    async with httpx.AsyncClient(timeout=300, trust_env=False) as client:
+        for chunk in chunks:
+            payload = {
+                "model": model,
+                "temperature": 0.0,
+                "max_tokens": env_int("AHAMVOICE_CORRECTION_MAX_TOKENS", 8192, 1024, 32768),
+                "messages": [
+                    {"role": "system", "content": system},
+                    {
+                        "role": "user",
+                        "content": (
+                            "下面是会议转写，每行格式 `行号<TAB>内容`。这场会里会出现的专有名词：\n"
+                            + "、".join(terms[:150])
+                            + "\n\n请找出被语音识别听错的专有名词，输出 JSON 数组：\n"
+                            '[{"line": 行号, "from": "稿子里错的原文片段", "to": "正确写法", "why": "判断依据"}]\n\n'
+                            "规则：\n"
+                            "1. from 必须是该行里逐字存在的片段，不能是你改写后的版本。\n"
+                            "2. 只改专有名词（公司名、人名、系统名、英文缩写）。语气词、重复、语法都不要动。\n"
+                            "3. 拿不准就不要输出。宁可漏掉，不要改错。\n"
+                            "4. 没有需要改的就输出 []。\n\n"
+                            + "\n".join(chunk)
+                        ),
+                    },
+                ],
+            }
+            try:
+                reply = await _deepseek_post_with_retry(client, f"{base}/chat/completions", api_key, payload)
+                parsed = parse_json_block(reply)
+            except Exception:
+                continue
+            if isinstance(parsed, dict):
+                parsed = parsed.get("corrections") or []
+            if isinstance(parsed, list):
+                collected.extend(item for item in parsed if isinstance(item, dict))
+    return collected
+
+
+async def correct_transcript_with_llm(recording_id: str, user: dict[str, Any]) -> dict[str, Any]:
+    """Run the correction pass and write back only what applies cleanly."""
+    with db() as conn:
+        rec = can_access_recording(conn, recording_id, user)
+        segments = rowsdict(
+            conn.execute(
+                "select id, text from transcript_segments where recording_id = ? order by start_sec",
+                (recording_id,),
+            ).fetchall()
+        )
+        terms = [
+            str(row["word"])
+            for row in conn.execute(
+                "select word from hotwords where active = 1 order by length(word) desc"
+            ).fetchall()
+        ]
+        terms += [
+            str(row["term"])
+            for row in conn.execute(
+                "select term from recording_hotwords where recording_id = ?", (recording_id,)
+            ).fetchall()
+        ]
+    if not segments or not terms:
+        return {"applied": 0, "proposed": 0, "skipped": 0}
+
+    proposals = await call_llm_transcript_corrections(rec, segments, terms)
+    applied: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    with db() as conn:
+        for item in proposals:
+            try:
+                index = int(item.get("line"))
+                wrong = str(item.get("from") or "").strip()
+                right = str(item.get("to") or "").strip()
+            except (TypeError, ValueError):
+                continue
+            if not wrong or not right or not (0 <= index < len(segments)):
+                skipped.append({**item, "reason": "行号或字段无效"})
+                continue
+            segment = segments[index]
+            fixed, count = apply_correction(str(segment["text"]), wrong, right)
+            if not count:
+                # 要么原文里没有这个片段（模型改写过），要么只出现在更长的词内部。
+                skipped.append({"from": wrong, "to": right, "reason": "找不到可安全替换的位置"})
+                continue
+            conn.execute("update transcript_segments set text = ? where id = ?", (fixed, segment["id"]))
+            segment["text"] = fixed
+            applied.append({"from": wrong, "to": right, "count": count})
+        if applied:
+            audit(
+                conn,
+                user,
+                "recording.correct",
+                f"转写纠错：{rec['title']}，"
+                + "、".join(f"{item['from']}→{item['to']}" for item in applied[:10])
+                + (f" 等共 {len(applied)} 处" if len(applied) > 10 else f"，共 {len(applied)} 处"),
+            )
+    return {"applied": len(applied), "proposed": len(proposals), "skipped": len(skipped), "items": applied}
+
+
 async def call_llm_hotword_suggestions(
     rec: dict[str, Any], transcript: str, known: list[str]
 ) -> dict[str, list[dict[str, Any]]]:
@@ -3887,18 +4040,25 @@ def run_emotion_job(recording_id: str, user: dict[str, Any]) -> None:
 
 
 def run_ai_enhancements(recording_id: str, user: dict[str, Any]) -> None:
-    """Mine the finished transcript for hotword suggestions. Best effort.
+    """Correct misheard proper nouns, then mine the transcript for new hotwords.
+
+    Best effort.
 
     Deliberately swallows failures: these are extras layered on a transcript the
     user already has, and a flaky model call must not mark the recording failed.
     """
     if not ai_enhance_enabled():
         return
-    try:
-        asyncio.run(generate_hotword_suggestions(recording_id, user))
-    except Exception as exc:
-        with db() as conn:
-            audit(conn, user, "recording.enhance", f"热词建议生成失败：{exc}")
+    # 纠错排在建议之前：建议是从稿子里挖词，让它看到已纠正的版本。
+    for label, coro in (
+        ("转写纠错", lambda: correct_transcript_with_llm(recording_id, user)),
+        ("热词建议", lambda: generate_hotword_suggestions(recording_id, user)),
+    ):
+        try:
+            asyncio.run(coro())
+        except Exception as exc:
+            with db() as conn:
+                audit(conn, user, "recording.enhance", f"{label}失败：{exc}")
 
 
 def process_recording_background(recording_id: str, user: dict[str, Any]) -> None:
@@ -5754,6 +5914,22 @@ def delete_voiceprint(profile_id: str, user: dict[str, Any] = Depends(current_us
         except OSError:
             pass
     return {"ok": True, "id": profile_id}
+
+
+@app.post("/api/recordings/{recording_id}/correct")
+async def correct_transcript_api(
+    recording_id: str,
+    user: dict[str, Any] = Depends(current_user),
+) -> dict[str, Any]:
+    """Re-run the proper-noun correction pass over an existing transcript.
+
+    Normally runs on its own after transcription; this is for when hotwords were
+    added afterwards and the transcript deserves another look — far cheaper than
+    re-transcribing.
+    """
+    if not ai_enhance_enabled():
+        raise HTTPException(status_code=409, detail="AI 增强已关闭，无法纠错")
+    return await correct_transcript_with_llm(recording_id, user)
 
 
 @app.get("/api/hotword-suggestions")
