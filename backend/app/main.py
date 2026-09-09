@@ -2519,7 +2519,7 @@ def phonetic_entries(conn: sqlite3.Connection) -> list[dict[str, Any]]:
 
 def apply_phonetic_corrections(conn: sqlite3.Connection, text: str) -> tuple[str, list[dict[str, Any]]]:
     """Fix proper nouns the recogniser got phonetically close but wrong."""
-    if not env_bool("AHAMVOICE_PHONETIC_CORRECTION", True):
+    if not env_bool("AHAMVOICE_PHONETIC_CORRECTION", False):
         return text, []
     entries = phonetic_entries(conn)
     if not entries:
@@ -2742,7 +2742,9 @@ def transcribe_recording(recording_id: str, user: dict[str, Any], segment_second
         corrections: list[dict[str, Any]] = []
         with db() as conn:
             entries = phonetic_entries(conn)
-        if entries and env_bool("AHAMVOICE_PHONETIC_CORRECTION", True):
+        # 默认关闭：音素匹配没有语义，「由你们」和「优尼昂」读音几乎相同，靠规则
+        # 分不开。在换用带 LLM 解码器的识别模型这条路验完之前，不默认改用户的稿子。
+        if entries and env_bool("AHAMVOICE_PHONETIC_CORRECTION", False):
             try:
                 from . import phonetic
 
