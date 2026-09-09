@@ -460,7 +460,6 @@ def ensure_schema() -> None:
                 title text not null,
                 filename text not null,
                 file_path text not null,
-                meeting_type text not null,
                 tag text,
                 owner_id text not null,
                 team_id text,
@@ -715,7 +714,6 @@ def ensure_schema() -> None:
             "crm_relation_target_id": "text",
             "crm_relation_target_name": "text",
             "crm_sync_response": "text not null default '{}'",
-            "expected_speakers": "integer",
             "speaker_count": "integer",
         }
         for column, definition in recording_migrations.items():
@@ -764,6 +762,14 @@ def ensure_schema() -> None:
             where status in ('done', 'failed')
             """
         )
+        # 会议类型 / 预计说话人 / 自动处理已经删掉：纪要模板按类型分叉的设计对
+        # "稿子交给大模型消费"没有意义，用户每次也都要自动处理。老库里的列一并
+        # 删除，不留死列。
+        recording_cols = {row["name"] for row in conn.execute("pragma table_info(recordings)").fetchall()}
+        for dead in ("meeting_type", "expected_speakers"):
+            if dead in recording_cols:
+                conn.execute(f"alter table recordings drop column {dead}")
+
         hotword_cols = {row["name"] for row in conn.execute("pragma table_info(hotwords)").fetchall()}
         hotword_migrations = {
             "source_key": "text",
@@ -1234,14 +1240,10 @@ def recording_filter_where(
     user: dict[str, Any],
     scope: str = "mine",
     q: str = "",
-    meeting_type: str = "",
 ) -> tuple[str, list[Any]]:
     where, args = recording_where(user, scope)
     filters = [where]
     values = list(args)
-    if meeting_type and meeting_type != "全部":
-        filters.append("recordings.meeting_type = ?")
-        values.append(meeting_type)
     if q.strip():
         like = f"%{q.strip()}%"
         filters.append(
@@ -1456,7 +1458,7 @@ def hotword_row_score(row: dict[str, Any], rec: dict[str, Any] | None = None, us
     if rec:
         context = " ".join(
             str(item or "")
-            for item in [rec.get("title"), rec.get("filename"), rec.get("tag"), rec.get("meeting_type")]
+            for item in [rec.get("title"), rec.get("filename"), rec.get("tag")]
         ).lower()
         for term in hotword_terms(row, alias_limit=6):
             if term.lower() in context:
@@ -2665,10 +2667,6 @@ def transcribe_recording(recording_id: str, user: dict[str, Any], segment_second
         }
         if hotword_text:
             generate_kwargs["hotword"] = hotword_text
-        expected_spk = rec_for_package.get("expected_speakers")
-        if expected_spk and int(expected_spk) >= 2:
-            # 用户填了预计人数 → 固定聚类簇数，避免 CAM++ 过度聚类。
-            generate_kwargs["preset_spk_num"] = int(expected_spk)
         expected_seconds = asr_expected_seconds(float(rec_for_package.get("duration") or 0))
         stop_ticker = threading.Event()
         ticker = threading.Thread(
@@ -2782,82 +2780,6 @@ def summary_depth_instruction(rec: dict[str, Any], text: str) -> str:
     return target
 
 
-def meeting_focus_instruction(meeting_type: str) -> str:
-    if meeting_type == "内部会议":
-        return (
-            "会议类型是内部会议。重点沉淀：销售/项目复盘脉络、客户或商机名称、项目阶段、现场判断、争议点、"
-            "资源/报价/方案/交付边界等讨论内容。不要写行动项或跟进清单。"
-        )
-    if meeting_type == "客户调研":
-        return (
-            "会议类型是客户调研。重点沉淀：客户业务背景、当前系统与流程、涉及部门/岗位、痛点或关注点、"
-            "预算/周期/范围等被明确提到的信息、客户原话和待澄清点。不要生成客户需求库。"
-        )
-    if meeting_type == "方案汇报":
-        return (
-            "会议类型是方案汇报。重点沉淀：方案范围、模块能力、客户反馈、异议与澄清、部署/集成/数据口径、"
-            "报价或边界讨论、达成共识与仍需确认的问题。"
-        )
-    if meeting_type == "销售电话":
-        return (
-            "会议类型是销售电话。重点沉淀：客户/联系人、来电背景、关注问题、产品或服务匹配点、价格/周期/竞品/决策链线索、"
-            "对话中的明确结论和待确认问题。"
-        )
-    return "根据会议类型保留业务背景、讨论细节、明确结论、待确认问题和可追溯原文证据。"
-
-
-def meeting_template(meeting_type: str) -> str:
-    """每类会议的专属纪要结构骨架。AI 按对应结构逐节输出，无内容的小节写“未明确”。
-    顶部「会议信息/一句话概览」与底部「关键原文证据」是所有类型共用的壳，
-    中间板块按会议类型切换。"""
-    head = ["# 会议纪要", "## 会议信息", "## 一句话概览"]
-    foot = ["## 关键原文证据"]
-    bodies = {
-        "销售电话": [
-            "## 通话背景（客户 / 联系人 / 来电由头）",
-            "## 客户现状与关注点",
-            "## 产品 / 服务匹配讨论",
-            "## 价格 / 周期 / 竞品 / 决策链线索",
-            "## 关键结论",
-            "## 待确认问题",
-        ],
-        "客户调研": [
-            "## 客户业务背景",
-            "## 当前系统与流程现状",
-            "## 涉及部门 / 岗位",
-            "## 痛点与关注点",
-            "## 预算 / 周期 / 范围（已明确提到的）",
-            "## 客户原话与待澄清点",
-        ],
-        "方案汇报": [
-            "## 方案范围与模块能力",
-            "## 客户反馈",
-            "## 异议与澄清",
-            "## 部署 / 集成 / 数据口径",
-            "## 报价与边界讨论",
-            "## 达成共识与仍需确认",
-        ],
-        "内部会议": [
-            "## 复盘主线（客户 / 商机 / 项目阶段）",
-            "## 各汇报人分述（能识别汇报人时每人一节，逐个过其名下项目：阶段/卡点/策略/结论）",
-            "## 争议点",
-            "## 资源 / 报价 / 方案 / 交付边界",
-            "## 关键结论",
-            "## 待确认问题",
-        ],
-    }
-    default_body = [
-        "## 核心摘要",
-        "## 讨论主线",
-        "## 重点议题详述",
-        "## 客户 / 项目 / 商机信息沉淀",
-        "## 关键结论",
-        "## 待确认问题",
-    ]
-    body = bodies.get((meeting_type or "").strip(), default_body)
-    return "\n".join(head + body + foot)
-
-
 def env_int(name: str, default: int, minimum: int, maximum: int) -> int:
     try:
         value = int(os.environ.get(name, str(default)))
@@ -2951,7 +2873,7 @@ async def _deepseek_post_with_retry(
 
 
 def summary_term_hint(rec: dict[str, Any]) -> str:
-    """告诉纪要模型这场会有哪些专名，以及转写可能把它们听错。
+    """把这场会的背景和专名交给纪要模型。
 
     这是整条链路上性价比最高的一处。实测同一段稿子：不给列表时纪要照抄了错的
     「ADV」，给了之后自动写成「AGV」。而「冒陌」「WWS」这类两种情况下都能从
@@ -2973,14 +2895,26 @@ def summary_term_hint(rec: dict[str, Any]) -> str:
                 "select term from recording_hotwords where recording_id = ?", (rec["id"],)
             ).fetchall()
         ]
+        row = rowdict(
+            conn.execute(
+                "select briefing from recording_contexts where recording_id = ?", (rec["id"],)
+            ).fetchone()
+        )
+    briefing = str((row or {}).get("briefing") or "").strip()
     unique = list(dict.fromkeys(term for term in terms if term.strip()))
-    if not unique:
-        return ""
-    return (
-        "\n本次会议涉及的专有名词：" + "、".join(unique[:150]) + "。\n"
-        "转写可能把它们听错（英文缩写尤其容易，例如 AGV 被听成 ADV、MOM 被听成「冒目」），"
-        "你在纪要里必须写正确的专名，不要照抄稿子里的错写法。\n"
-    )
+
+    parts: list[str] = []
+    if briefing:
+        # 用户在助手里讲的会前背景。此前只用来提取专名，那段话本身没人读——
+        # 而它恰恰交代了谁是谁、这场会要谈什么，是纪要最缺的上下文。
+        parts.append(f"\n会前背景（由用户提供，可信度高于转写）：{briefing[:1200]}\n")
+    if unique:
+        parts.append(
+            "\n本次会议涉及的专有名词：" + "、".join(unique[:150]) + "。\n"
+            "转写可能把它们听错（英文缩写尤其容易，例如 AGV 被听成 ADV、MOM 被听成「冒目」），"
+            "你在纪要里必须写正确的专名，不要照抄稿子里的错写法。\n"
+        )
+    return "".join(parts)
 
 
 async def call_deepseek_summary(text: str, rec: dict[str, Any]) -> tuple[str, str]:
@@ -2992,7 +2926,6 @@ async def call_deepseek_summary(text: str, rec: dict[str, Any]) -> tuple[str, st
     chunk_chars = env_int("AHAMVOICE_SUMMARY_CHUNK_CHARS", 18000, 8000, 28000)
     chunks = [text[i : i + chunk_chars] for i in range(0, len(text), chunk_chars)] or [""]
     depth = summary_depth_instruction(rec, text)
-    focus = meeting_focus_instruction(rec.get("meeting_type") or "")
     partials: list[str] = []
     chat_url = f"{base}/chat/completions"
     async with httpx.AsyncClient(timeout=180, trust_env=False) as client:
@@ -3027,9 +2960,8 @@ async def call_deepseek_summary(text: str, rec: dict[str, Any]) -> tuple[str, st
                             "### 结论与待确认\n"
                             "### 可引用原文证据\n\n"
                             f"录音标题：{rec['title']}\n"
-                            f"会议类型：{rec['meeting_type']}\n"
                             f"分块：{index}/{len(chunks)}\n\n"
-                            f"{focus}\n{term_hint}\n"
+                            f"{term_hint}\n"
                             f"{chunk}"
                         ),
                     },
@@ -3058,10 +2990,9 @@ async def call_deepseek_summary(text: str, rec: dict[str, Any]) -> tuple[str, st
                     "content": (
                         f"请将以下分块素材合并为最终纪要。纪要要比普通摘要更丰富，适合销售经理或项目负责人回看会议全貌。\n\n"
                         f"标题：{rec['title']}\n"
-                        f"会议类型：{rec['meeting_type']}\n"
                         f"录音时长：{rec['duration_label']}\n\n"
                         f"深度要求：{depth}\n"
-                        f"类型侧重点：{focus}\n{term_hint}\n"
+                        f"{term_hint}"
                         "写作要求：\n"
                         "- 先给整体判断，再按议题展开细节；不要把所有内容压成三五条。\n"
                         "- 每个重点议题尽量包含：背景/上下文、讨论细节、相关人或客户态度、明确结论、待确认问题、时间戳证据。\n"
@@ -3069,7 +3000,7 @@ async def call_deepseek_summary(text: str, rec: dict[str, Any]) -> tuple[str, st
                         "- 关键原文证据要分散覆盖主要议题，不要只引用开头几分钟。\n"
                         "- 不要出现“行动项”“待办”“下一步”“跟进事项”等表述。\n\n"
                         "请严格按以下结构输出（小节标题和顺序保持不变；某节无内容就写“未明确”，不要删节也不要新增顶级小节）：\n"
-                        + meeting_template(rec.get("meeting_type") or "") + "\n\n"
+                        + "\n\n"
                         + "\n\n".join(partials)
                     ),
                 },
@@ -3093,7 +3024,6 @@ async def call_deepseek_revision(instruction: str, base_summary: str, transcript
             + transcript[-9000:]
         )
     depth = summary_depth_instruction(rec, transcript)
-    focus = meeting_focus_instruction(rec.get("meeting_type") or "")
     payload = {
         "model": model,
         "temperature": 0.2,
@@ -3112,11 +3042,9 @@ async def call_deepseek_revision(instruction: str, base_summary: str, transcript
                 "role": "user",
                 "content": (
                     f"录音标题：{rec['title']}\n"
-                    f"会议类型：{rec['meeting_type']}\n"
                     f"录音时长：{rec['duration_label']}\n\n"
                     f"深度要求：{depth}\n"
-                    f"类型侧重点：{focus}\n{term_hint}\n"
-                    f"目标结构（除非用户明确要求改结构，否则按此组织小节）：\n{meeting_template(rec.get('meeting_type') or '')}\n\n"
+                    f"{term_hint}"
                     f"用户修改要求：\n{instruction}\n\n"
                     f"当前纪要：\n{base_summary}\n\n"
                     f"转写文本校验依据：\n{transcript_context}\n\n"
@@ -3655,7 +3583,7 @@ def transcript_markdown(conn: sqlite3.Connection, rec: dict[str, Any]) -> str:
     return (
         f"# {rec['title']} 转写\n\n"
         "## 录音信息\n\n"
-        f"- 会议类型：{rec['meeting_type']}\n"
+
         f"- 客户 / 项目：{rec.get('tag') or '-'}\n"
         f"- 录音时长：{rec['duration_label']}\n"
         "- ASR 引擎：Paraformer + FSMN-VAD + CT-Punc + CAM++\n"
@@ -3885,7 +3813,7 @@ def call_deepseek_emotion(annotated_transcript: str, rec: dict[str, Any], acoust
             {
                 "role": "user",
                 "content": (
-                    f"录音标题：{rec.get('title')}\n会议类型：{rec.get('meeting_type')}\n时长：{rec.get('duration_label')}\n\n"
+                    f"录音标题：{rec.get('title')}\n时长：{rec.get('duration_label')}\n\n"
                     "请严格按以下结构输出 Markdown（小节顺序不变；无内容的小节写“未明确”）：\n"
                     "# 对话情绪分析\n"
                     "## 整体情绪基调\n"
@@ -4341,10 +4269,9 @@ def _guard_admin_change(
 def recordings(
     scope: str = "mine",
     q: str = "",
-    meeting_type: str = "",
     user: dict[str, Any] = Depends(current_user),
 ) -> list[dict[str, Any]]:
-    where, args = recording_filter_where(user, scope, q, meeting_type)
+    where, args = recording_filter_where(user, scope, q)
     with db() as conn:
         rows = conn.execute(
             f"""
@@ -4363,10 +4290,8 @@ def upload_recording(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     title: str = Form(...),
-    meeting_type: str = Form("内部会议"),
     tag: str = Form(""),
-    auto_process: bool = Form(True),
-    expected_speakers: int | None = Form(None),
+    briefing: str = Form(""),
     user: dict[str, Any] = Depends(current_user),
 ) -> dict[str, Any]:
     if user["role"] == "admin":
@@ -4405,23 +4330,21 @@ def upload_recording(
     with db() as conn:
         conn.execute(
             """
-            insert into recordings(id,title,filename,file_path,meeting_type,tag,owner_id,team_id,duration,duration_label,asr_status,summary_status,expected_speakers,created_at,updated_at)
-            values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            insert into recordings(id,title,filename,file_path,tag,owner_id,team_id,duration,duration_label,asr_status,summary_status,created_at,updated_at)
+            values(?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 rec_id,
                 title.strip() or Path(file.filename or "录音").stem,
                 file.filename or target.name,
                 str(target),
-                meeting_type,
                 tag,
                 user["id"],
                 user.get("team_id"),
                 duration,
                 seconds_label(duration),
-                "queued" if auto_process else "pending",
+                "queued",
                 "pending",
-                (expected_speakers if (expected_speakers and 2 <= expected_speakers <= 50) else None),
                 now(),
                 now(),
             ),
@@ -4429,8 +4352,9 @@ def upload_recording(
         audit(conn, user, "recording", f"上传录音：{title.strip() or file.filename}。")
         rec = rowdict(conn.execute("select * from recordings where id = ?", (rec_id,)).fetchone())
         payload = recording_payload(conn, rec)
-    if auto_process:
-        background_tasks.add_task(process_recording_background, rec_id, dict(user))
+    if briefing.strip():
+        store_recording_context(rec_id, briefing, None, user)
+    background_tasks.add_task(process_recording_background, rec_id, dict(user))
     return payload
 
 
@@ -4449,9 +4373,11 @@ def import_recording(
 
     The browser upload path exists for humans dragging a file in; an assistant
     driving the app over MCP already has the file locally, so copying its bytes
-    through a multipart request would be pure waste. Defaults to *not* starting
-    the pipeline so a briefing can be attached first (see
-    PUT /api/recordings/{id}/context).
+    through a multipart request would be pure waste.
+
+    `briefing` and `terms` can be attached in the same call, so one round trip
+    covers "here is the file, here is what the meeting is about" and processing
+    starts with that context already in place.
     """
     raw_path = str(payload.get("path") or "").strip()
     if not raw_path:
@@ -4485,43 +4411,43 @@ def import_recording(
         target.unlink(missing_ok=True)
         raise
     title = str(payload.get("title") or "").strip() or source.stem
-    auto_process = bool(payload.get("auto_process", False))
-    expected_speakers = payload.get("expected_speakers")
-    try:
-        expected_speakers = int(expected_speakers) if expected_speakers else None
-    except (TypeError, ValueError):
-        expected_speakers = None
+    briefing = str(payload.get("briefing") or "").strip()
+    raw_terms = payload.get("terms") or []
     with db() as conn:
         conn.execute(
             """
-            insert into recordings(id,title,filename,file_path,meeting_type,tag,owner_id,team_id,duration,duration_label,asr_status,summary_status,expected_speakers,created_at,updated_at)
-            values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            insert into recordings(id,title,filename,file_path,tag,owner_id,team_id,duration,duration_label,asr_status,summary_status,created_at,updated_at)
+            values(?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 rec_id,
                 title,
                 source.name,
                 str(target),
-                str(payload.get("meeting_type") or "内部会议"),
                 str(payload.get("tag") or ""),
                 user["id"],
                 user.get("team_id"),
                 duration,
                 seconds_label(duration),
-                "queued" if auto_process else "pending",
+                "queued",
                 "pending",
-                (expected_speakers if (expected_speakers and 2 <= expected_speakers <= 50) else None),
                 now(),
                 now(),
             ),
         )
         audit(conn, user, "recording", f"导入本机录音：{title}（{source}）。")
+    rejected: list[dict[str, str]] = []
+    if briefing or raw_terms:
+        stored = store_recording_context(rec_id, briefing, raw_terms, user, replace=True)
+        rejected = stored["rejected"]
+    with db() as conn:
         rec = rowdict(conn.execute("select * from recordings where id = ?", (rec_id,)).fetchone())
         result = recording_payload(conn, rec)
-    if auto_process:
-        threading.Thread(
-            target=process_recording_background, args=(rec_id, dict(user)), daemon=True
-        ).start()
+    threading.Thread(
+        target=process_recording_background, args=(rec_id, dict(user)), daemon=True
+    ).start()
+    if rejected:
+        result["rejected_terms"] = rejected
     return result
 
 
@@ -4551,42 +4477,39 @@ def get_recording_context(recording_id: str, user: dict[str, Any] = Depends(curr
         return recording_context_payload(conn, recording_id)
 
 
-@app.put("/api/recordings/{recording_id}/context")
-def put_recording_context(
+def store_recording_context(
     recording_id: str,
-    payload: dict[str, Any] = Body(...),
-    user: dict[str, Any] = Depends(current_user),
+    briefing: str | None,
+    raw_terms: Any,
+    user: dict[str, Any],
+    replace: bool = True,
 ) -> dict[str, Any]:
-    """Attach a pre-meeting briefing and its terms to one recording.
+    """Write a meeting's background and its proper nouns.
 
-    Meant to be driven by an assistant over MCP: the user describes the meeting
-    in chat ("会跟兰之天谈 MES，参会张三李四"), the assistant distills the proper
-    nouns and posts them here before transcription starts. Terms that seaco
-    cannot use are returned with a reason so the assistant can rephrase instead
-    of having them silently dropped.
+    Shared by the import call and the standalone context endpoint so an
+    assistant can do it in one round trip or fix it up afterwards.
+
+    Terms seaco cannot use come back with a reason rather than being silently
+    dropped, so the caller can rephrase — an assistant that is told
+    「公司全称口语里没人说」 will send the short form instead.
     """
+    ts = now()
+    accepted: list[dict[str, Any]] = []
+    rejected: list[dict[str, str]] = []
     with db() as conn:
-        rec = can_access_recording(conn, recording_id, user)
-        ts = now()
-        accepted: list[dict[str, Any]] = []
-        rejected: list[dict[str, str]] = []
-
-        if "briefing" in payload:
-            briefing = str(payload.get("briefing") or "").strip()
+        if briefing is not None:
             conn.execute(
                 """
                 insert into recording_contexts(recording_id, briefing, created_at, updated_at)
                 values(?,?,?,?)
                 on conflict(recording_id) do update set briefing = excluded.briefing, updated_at = excluded.updated_at
                 """,
-                (recording_id, briefing, ts, ts),
+                (recording_id, briefing.strip(), ts, ts),
             )
-
-        if "terms" in payload:
-            raw_terms = payload.get("terms") or []
+        if raw_terms is not None:
             if not isinstance(raw_terms, list):
                 raise HTTPException(status_code=400, detail="terms must be a list")
-            if payload.get("replace", True):
+            if replace:
                 conn.execute("delete from recording_hotwords where recording_id = ?", (recording_id,))
             existing = {
                 str(row["term"]).lower()
@@ -4609,7 +4532,7 @@ def put_recording_context(
                     continue
                 raw_aliases = raw.get("aliases") or []
                 if isinstance(raw_aliases, str):
-                    raw_aliases = [item for item in raw_aliases.split(",")]
+                    raw_aliases = raw_aliases.split(",")
                 aliases = []
                 for alias in raw_aliases:
                     alias = str(alias).strip()
@@ -4633,17 +4556,42 @@ def put_recording_context(
                 )
                 existing.add(term.lower())
                 accepted.append({"term": term, "aliases": aliases})
-
         audit(
             conn,
             user,
             "recording.context",
-            f"更新会前上下文：{rec['title']}，接受 {len(accepted)} 条术语，拒绝 {len(rejected)} 条。",
+            f"更新会前说明：接受 {len(accepted)} 条术语，拒绝 {len(rejected)} 条。",
         )
         result = recording_context_payload(conn, recording_id)
     result["accepted"] = accepted
     result["rejected"] = rejected
-    # 上下文只在下一次转写时生效；已经转写过的录音需要重新处理才会用上。
+    return result
+
+
+@app.put("/api/recordings/{recording_id}/context")
+def put_recording_context(
+    recording_id: str,
+    payload: dict[str, Any] = Body(...),
+    user: dict[str, Any] = Depends(current_user),
+) -> dict[str, Any]:
+    """Attach or update a recording's background and proper nouns.
+
+    The background is free text the user dictated to an assistant ("这次去优尼昂
+    现场，客户方喻总和包主任，聊 ERP 和 MOM 是否同步建设"). It reaches the summary
+    prompt verbatim — it says who is who and what the meeting is for, which is
+    the context a transcript alone never carries, and it is more trustworthy
+    than the transcript because the user wrote it.
+    """
+    with db() as conn:
+        rec = can_access_recording(conn, recording_id, user)
+    result = store_recording_context(
+        recording_id,
+        payload.get("briefing") if "briefing" in payload else None,
+        payload.get("terms") if "terms" in payload else None,
+        user,
+        replace=bool(payload.get("replace", True)),
+    )
+    # 术语只在下一次转写时生效；说明对纪要立即生效。
     result["applies_on_next_run"] = True
     result["asr_status"] = rec["asr_status"]
     return result

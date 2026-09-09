@@ -51,7 +51,6 @@ export interface Recording {
   title: string;
   filename: string;
   file_path: string;
-  meeting_type: string;
   tag: string | null;
   duration: number;
   duration_label: string;

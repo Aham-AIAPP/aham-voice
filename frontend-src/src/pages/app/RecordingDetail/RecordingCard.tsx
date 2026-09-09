@@ -38,9 +38,7 @@ export function RecordingCard({ recording, segments, hotwordPackage }: Props) {
       <header className="row" style={{ flexWrap: "wrap", gap: "var(--s2)", alignItems: "baseline" }}>
         <span className="ftype">录音</span>
         <span style={{ fontSize: "var(--text-sm)", fontWeight: "var(--w-medium)" }}>{recording.filename}</span>
-        <span className="text-caption">
-          {recording.meeting_type} · {recording.duration_label}
-        </span>
+        <span className="text-caption">{recording.duration_label}</span>
       </header>
 
       <AudioPlayer

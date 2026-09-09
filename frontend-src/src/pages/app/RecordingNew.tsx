@@ -10,7 +10,6 @@ import { readApiError } from "@/api/client";
 import { formatBytes } from "@/utils/format";
 import { cn } from "@/utils/cn";
 
-const MEETING_TYPES = ["内部会议", "客户调研", "方案汇报", "销售电话"];
 const ACCEPTED = ".m4a,.mp3,.wav,.aac,.flac,.amr,.opus,.mp4,.wma";
 
 export function RecordingNew() {
@@ -18,9 +17,7 @@ export function RecordingNew() {
   const qc = useQueryClient();
   const [file, setFile] = useState<File | null>(null);
   const [title, setTitle] = useState("");
-  const [meetingType, setMeetingType] = useState(MEETING_TYPES[0]);
-  const [autoProcess, setAutoProcess] = useState(true);
-  const [expectedSpeakers, setExpectedSpeakers] = useState("");
+  const [briefing, setBriefing] = useState("");
   const [error, setError] = useState<string | null>(null);
   // Field-level validation messages, rendered under their own controls so the
   // user is pointed at the exact field to fix rather than a page-level banner.
@@ -83,9 +80,7 @@ export function RecordingNew() {
     mutation.mutate({
       file,
       title: title.trim(),
-      meeting_type: meetingType,
-      auto_process: autoProcess,
-      expected_speakers: expectedSpeakers ? Number(expectedSpeakers) : null,
+      briefing,
       onProgress: (p) => setUploadPct(p),
     });
   }
@@ -161,45 +156,20 @@ export function RecordingNew() {
           />
         </FormRow>
 
-        <FormRow label="会议类型" htmlFor="rec-type">
-          <select
-            id="rec-type"
-            className="select"
-            value={meetingType}
-            onChange={(e) => setMeetingType(e.target.value)}
-          >
-            {MEETING_TYPES.map((t) => (
-              <option key={t} value={t}>
-                {t}
-              </option>
-            ))}
-          </select>
-        </FormRow>
-
-        <FormRow label="预计说话人数" optional htmlFor="rec-spk" hint="填了能让说话人分离更准、避免一个人被拆成好几个。不确定就留空（自动判断）。">
-          <input
-            id="rec-spk"
-            className="input"
-            type="number"
-            min={2}
-            max={50}
-            value={expectedSpeakers}
-            onChange={(e) => setExpectedSpeakers(e.target.value)}
-            placeholder="如：7"
-            style={{ maxWidth: 160 }}
+        <FormRow
+          label="说明"
+          optional
+          htmlFor="rec-brief"
+          hint="这场会的背景：谁在场、什么关系、要谈什么、会提到哪些专有名词。写了会一并交给大模型，纪要会准得多——它比转写可信，因为是你写的。"
+        >
+          <textarea
+            id="rec-brief"
+            className="textarea"
+            rows={4}
+            value={briefing}
+            onChange={(e) => setBriefing(e.target.value)}
+            placeholder="例如：到苏州优尼昂现场交流项目推动。我方是金蝶实施服务商，客户方喻总和 IT 负责人包主任在场。围绕 ERP 与 MOM 是否同步建设、老 MES 架构老化展开。"
           />
-        </FormRow>
-
-        <FormRow label="自动处理" hint="上传后自动转写并调用 DeepSeek 生成纪要。关闭后可手动触发。">
-          <label className="ctl-row">
-            <input
-              type="checkbox"
-              className="check"
-              checked={autoProcess}
-              onChange={(e) => setAutoProcess(e.target.checked)}
-            />
-            <span>上传后立即开始转写</span>
-          </label>
         </FormRow>
 
         {error && <Diag code="REC_E_UPLOAD">{error}</Diag>}

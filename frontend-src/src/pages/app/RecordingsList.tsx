@@ -14,11 +14,10 @@ import { formatRelative } from "@/utils/format";
 import { statusLabel, overallLabel } from "@/utils/status";
 import type { Recording } from "@/api/types";
 
-const MEETING_TYPES = ["全部", "内部会议", "客户调研", "方案汇报", "销售电话"];
 
 // Sortable columns. Each maps to a comparable scalar so the table can be
 // sorted with a single shared comparator (string locale-aware, number numeric).
-type SortKey = "title" | "meeting_type" | "duration" | "updated_at";
+type SortKey = "title" | "duration" | "updated_at";
 type SortDir = "asc" | "desc";
 
 function sortValue(rec: Recording, key: SortKey): string | number {
@@ -28,7 +27,6 @@ function sortValue(rec: Recording, key: SortKey): string | number {
     case "updated_at":
       return rec.updated_at ? Date.parse(rec.updated_at) : 0;
     case "title":
-    case "meeting_type":
     default:
       return (rec[key] ?? "").toString().toLowerCase();
   }
@@ -73,7 +71,6 @@ function SortableTh({
 }
 
 export function RecordingsList() {
-  const [meetingType, setMeetingType] = useState<string>("全部");
   const [q, setQ] = useState("");
   // Controlled table sort. Clicking a sortable header toggles asc/desc, or
   // switches the active column. updated_at defaults to most-recent-first.
@@ -88,8 +85,8 @@ export function RecordingsList() {
   const qc = useQueryClient();
 
   const query = useQuery({
-    queryKey: ["recordings", meetingType, q],
-    queryFn: () => fetchRecordings({ meeting_type: meetingType, q }),
+    queryKey: ["recordings", q],
+    queryFn: () => fetchRecordings({ q }),
   });
 
   // Per-row delete. Confirms, calls the backend, then invalidates every
@@ -157,18 +154,6 @@ export function RecordingsList() {
               value={q}
               onChange={(e) => setQ(e.target.value)}
             />
-            <select
-              className="select"
-              value={meetingType}
-              onChange={(e) => setMeetingType(e.target.value)}
-              aria-label="会议类型"
-            >
-              {MEETING_TYPES.map((t) => (
-                <option key={t} value={t}>
-                  {t}
-                </option>
-              ))}
-            </select>
           </div>
         </div>
 
@@ -199,14 +184,14 @@ export function RecordingsList() {
             <div className="page-state">
               <Icon name="mic" size={48} className="page-state__icon" />
               <div className="page-state__title">
-                {q || meetingType !== "全部" ? "没有匹配的录音" : "还没有任何录音"}
+                {q ? "没有匹配的录音" : "还没有任何录音"}
               </div>
               <p className="page-state__desc">
-                {q || meetingType !== "全部"
+                {q
                   ? "当前筛选下没有匹配的录音。试试清空筛选条件。"
                   : "还没有任何录音。从右上角上传一段开始。"}
               </p>
-              {!q && meetingType === "全部" && (
+              {!q && (
                 <div className="page-state__actions">
                   <Link to="/app/recordings/new">
                     <Button variant="primary">上传录音</Button>
@@ -221,7 +206,6 @@ export function RecordingsList() {
             <thead>
               <tr>
                 <SortableTh label="录音" sortKey="title" active={sortKey} dir={sortDir} onSort={toggleSort} />
-                <SortableTh label="会议类型" sortKey="meeting_type" active={sortKey} dir={sortDir} onSort={toggleSort} />
                 <SortableTh label="时长" sortKey="duration" active={sortKey} dir={sortDir} onSort={toggleSort} numeric />
                 <th>状态</th>
                 <SortableTh label="更新" sortKey="updated_at" active={sortKey} dir={sortDir} onSort={toggleSort} />
@@ -241,7 +225,6 @@ export function RecordingsList() {
                         </div>
                       </div>
                     </td>
-                    <td className="cat">{rec.meeting_type}</td>
                     <td className="num">{rec.duration_label}</td>
                     <td>
                       <Status tone={overall.tone}>{overall.label}</Status>

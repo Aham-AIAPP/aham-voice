@@ -85,13 +85,11 @@ async def _call(method: str, path: str, **kwargs: Any) -> Any:
 
 
 @server.tool()
-async def list_recordings(query: str = "", meeting_type: str = "", limit: int = 20) -> list[dict[str, Any]]:
+async def list_recordings(query: str = "", limit: int = 20) -> list[dict[str, Any]]:
     """列出录音库里的录音（最新在前）。query 匹配标题，limit 默认 20。"""
     params: dict[str, Any] = {}
     if query:
         params["q"] = query
-    if meeting_type:
-        params["meeting_type"] = meeting_type
     items = await _call("GET", "/api/recordings", params=params)
     return items[: max(1, min(int(limit), 200))]
 
@@ -110,26 +108,34 @@ async def get_recording(recording_id: str) -> dict[str, Any]:
 async def import_recording(
     path: str,
     title: str = "",
-    meeting_type: str = "内部会议",
+    briefing: str = "",
+    terms: list[str] | None = None,
     tag: str = "",
-    expected_speakers: int | None = None,
-    start_now: bool = False,
 ) -> dict[str, Any]:
-    """把本机上一个已有的音频/视频文件导入录音库（复制，不动原文件）。
+    """把本机上的音频导入 Aham Voice 并立即开始转写。
 
-    默认 start_now=False，先不跑转写——这样你可以先用 set_recording_context
-    把这场会的背景和专名写进去，再调 start_processing，热词才来得及生效。
-    expected_speakers 填了（≥2）能防止说话人被过度聚类。
+    path 必须是绝对路径。文件是复制进去的，原文件不动。
+
+    briefing 是这场会的背景——谁在场、什么关系、要谈什么。请把用户在对话里
+    讲的原话整理进去，它会原样交给纪要模型，并且比转写更可信（转写会听错，
+    用户写的不会）。这是让纪要变准最省力的一处。
+
+    terms 是这场会的专有名词，只对这条录音生效、优先级高于常驻热词库。
+    中文专名效果最好；英文缩写对识别偏置基本无效（实测），但写进来仍然有用
+    ——纪要模型会据此写对专名。不合规的词会连原因一并返回（比如公司全称
+    口语里没人说），据此改写后重提即可。
+
+    返回录音对象；被拒的词在 rejected_terms 里。
     """
-    payload: dict[str, Any] = {
-        "path": path,
-        "title": title,
-        "meeting_type": meeting_type,
-        "tag": tag,
-        "auto_process": bool(start_now),
-    }
-    if expected_speakers:
-        payload["expected_speakers"] = int(expected_speakers)
+    payload: dict[str, Any] = {"path": path}
+    if title:
+        payload["title"] = title
+    if briefing:
+        payload["briefing"] = briefing
+    if terms:
+        payload["terms"] = terms
+    if tag:
+        payload["tag"] = tag
     return await _call("POST", "/api/recordings/import", json=payload)
 
 

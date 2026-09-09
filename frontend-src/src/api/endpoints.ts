@@ -141,10 +141,7 @@ export async function deleteModel(key: string): Promise<ModelInfo> {
 
 // -------- recordings --------
 
-export async function fetchRecordings(params: {
-  q?: string;
-  meeting_type?: string;
-}): Promise<Recording[]> {
+export async function fetchRecordings(params: { q?: string }): Promise<Recording[]> {
   const { data } = await api.get<Recording[]>("/recordings", { params });
   return data;
 }
@@ -162,21 +159,15 @@ export async function deleteRecording(id: string): Promise<DeleteRecordingRespon
 export async function uploadRecording(input: {
   file: File;
   title: string;
-  meeting_type?: string;
   tag?: string;
-  auto_process?: boolean;
-  expected_speakers?: number | null;
+  briefing?: string;
   onProgress?: (pct: number) => void;
 }): Promise<Recording> {
   const form = new FormData();
   form.append("file", input.file);
   form.append("title", input.title);
-  if (input.meeting_type) form.append("meeting_type", input.meeting_type);
   if (input.tag) form.append("tag", input.tag);
-  form.append("auto_process", String(input.auto_process ?? true));
-  if (input.expected_speakers && input.expected_speakers >= 2) {
-    form.append("expected_speakers", String(input.expected_speakers));
-  }
+  if (input.briefing) form.append("briefing", input.briefing);
   const { data } = await api.post<Recording>("/recordings", form, {
     onUploadProgress: (e) => {
       if (input.onProgress && e.total) {
