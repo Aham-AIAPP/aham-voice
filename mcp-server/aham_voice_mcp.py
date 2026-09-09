@@ -240,6 +240,10 @@ async def add_hotwords(words: list[dict[str, Any]]) -> dict[str, Any]:
     每项 {"word": "安灯", "aliases": "安登,安灯系统", "kind": "业务术语", "weight": 6}。
     只影响一场会的词不要加到这里——用 set_recording_context。
 
+    应用本身不再从转写里挖热词：转写完再补词，对这条录音已经晚了（热词要在
+    识别前就位才有用），而挑哪些词值得长期留在库里，你比一个固定的提示词判得准。
+    看完稿子觉得哪些专名该收，直接用这个工具写进来。
+
     英文缩写务必带 spoken（口语形式），否则救不回来：ASR 偏置对显示形式无效，
     实测把 "MOM" 当热词与不加热词的输出逐字节相同。转写后的音素纠错靠 spoken
     工作，一条 {"word": "MOM", "spoken": "毛姆,mom"} 就能同时覆盖
@@ -256,57 +260,6 @@ async def add_hotwords(words: list[dict[str, Any]]) -> dict[str, Any]:
         except ToolError as exc:
             failed.append({"word": str(item.get("word")), "error": str(exc)})
     return {"added": added, "failed": failed}
-
-
-@server.tool()
-async def correct_transcript(recording_id: str) -> dict[str, Any]:
-    """重新校对一份已有转写里被听错的专名。
-
-    转写完会自动跑一次。这个工具用于事后补了热词、想让稿子再过一遍的情况——
-    比重新转写便宜得多（几分钟 vs 几十分钟）。
-
-    只改专有名词，不改写内容。模型给出的替换如果在原文里找不到可安全替换的
-    位置（比如 "MS" 只出现在 "WMS" 内部），会被丢弃而不是硬改。
-    返回 {"applied": 已改处数, "proposed": 模型给出的条数, "skipped": 丢弃条数}。
-    """
-    return await _call("POST", f"/api/recordings/{recording_id}/correct")
-
-
-@server.tool()
-async def suggest_hotwords(recording_id: str) -> dict[str, Any]:
-    """从一段转写里挖掘该加的热词，以及疑似被听错的专名。
-
-    返回 {"stored": 新建议数, "rejected": [被规则挡掉的及原因], "suggestions": [...]}。
-    只产生待办建议，不会直接改热词库——要用 accept_hotword_suggestion 才落库。
-    corrections 类的建议采纳后会把「听错的写法」加成别名，直接改善下一次转写。
-    """
-    return await _call("POST", f"/api/recordings/{recording_id}/hotword-suggestions")
-
-
-@server.tool()
-async def list_hotword_suggestions(recording_id: str = "", status: str = "pending") -> list[dict[str, Any]]:
-    """列出热词建议。不给 recording_id 就列全库的。
-
-    kind='term' 是建议新增的词；kind='correction' 是「heard 应该是 suggested」的纠错。
-    """
-    if recording_id:
-        return await _call("GET", f"/api/recordings/{recording_id}/hotword-suggestions")
-    return await _call("GET", "/api/hotword-suggestions", params={"status": status})
-
-
-@server.tool()
-async def accept_hotword_suggestion(suggestion_id: str) -> dict[str, Any]:
-    """采纳一条热词建议，写进常驻热词库。
-
-    纠错类建议会把听错的写法加成该词的别名；新词类会新建热词。
-    """
-    return await _call("POST", f"/api/hotword-suggestions/{suggestion_id}/accept")
-
-
-@server.tool()
-async def reject_hotword_suggestion(suggestion_id: str) -> dict[str, Any]:
-    """否掉一条热词建议，不再出现在待办里。"""
-    return await _call("POST", f"/api/hotword-suggestions/{suggestion_id}/reject")
 
 
 @server.tool()

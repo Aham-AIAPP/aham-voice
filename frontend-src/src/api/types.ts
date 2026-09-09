@@ -288,23 +288,6 @@ export interface EmotionAnalysis {
   is_current: number;
 }
 
-// A pending proposal for the hotword table. kind="term" is a new word;
-// kind="correction" means `heard` should have been `suggested`, and accepting it
-// files `heard` as an alias so the next transcript gets it right.
-export interface HotwordSuggestion {
-  id: string;
-  recording_id: string | null;
-  recording_title?: string | null;
-  kind: "term" | "correction";
-  heard: string;
-  suggested: string;
-  reason: string;
-  confidence: number;
-  status: "pending" | "accepted" | "rejected";
-  created_at: string;
-  decided_at: string | null;
-}
-
 export interface RecordingDetail {
   recording: Recording;
   segments: TranscriptSegment[];
@@ -343,9 +326,6 @@ export interface Settings {
   deepseek_configured: boolean;
   deepseek_api_base: string;
   deepseek_model: string;
-  // Master switch for the optional LLM passes (章节、术语建议). Off keeps
-  // everything beyond the summary on this machine.
-  ai_enhance: boolean;
 }
 
 // One local model in the download manager. `status` is derived from the remote

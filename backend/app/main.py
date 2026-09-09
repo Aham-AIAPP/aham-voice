@@ -183,17 +183,6 @@ def voiceprint_autolearn_enabled() -> bool:
     return True if value is None else bool(value)
 
 
-def ai_enhance_enabled() -> bool:
-    """Master switch for the optional LLM pass that mines finished transcripts
-    for hotwords it got wrong. Off means nothing beyond the existing summary
-    leaves the machine."""
-    raw = os.environ.get("AHAMVOICE_AI_ENHANCE")
-    if raw is not None:
-        return raw.strip().lower() not in {"", "0", "false", "no", "off"}
-    value = load_user_config().get("ai_enhance")
-    return True if value is None else bool(value)
-
-
 # ---------------------------------------------------------------------------
 # Runtime handshake. The desktop launcher picks a port at startup, so anything
 # outside the app (the MCP server, a script) has no way to find the API. We
@@ -640,20 +629,6 @@ def ensure_schema() -> None:
                 vector text not null,
                 created_at text not null
             );
-            create table if not exists hotword_suggestions (
-                id text primary key,
-                recording_id text,
-                kind text not null,
-                heard text not null default '',
-                suggested text not null,
-                reason text not null default '',
-                confidence real not null default 0.6,
-                status text not null default 'pending',
-                created_at text not null,
-                decided_at text
-            );
-            create unique index if not exists idx_hotword_suggestions_key
-                on hotword_suggestions(recording_id, kind, heard, suggested);
             create table if not exists speaker_samples (
                 id text primary key,
                 profile_id text not null,
@@ -2872,6 +2847,37 @@ async def _deepseek_post_with_retry(
     raise RuntimeError(f"大模型请求失败: {last_error}")
 
 
+def summary_acoustic_hint(rec: dict[str, Any]) -> str:
+    """本次录音的声学情绪，作为纪要的判断依据。
+
+    只取已经聚合过的那张表（每个说话人一行）加最多 12 条负面强片段——在一段
+    42 分钟会议上约 2100 字，只占转写全文的 15%。逐段情绪有 222 条、两万字，
+    比稿子本身还长，不喂。
+
+    只放进最终合成那一步，不放进每个分块，否则要乘以块数。判断"客户在报价
+    环节有抵触"本来也是通盘看完才下的。
+    """
+    with db() as conn:
+        row = rowdict(
+            conn.execute(
+                "select content from emotion_analyses where recording_id = ? and is_current = 1"
+                " order by version desc limit 1",
+                (rec["id"],),
+            ).fetchone()
+        )
+    content = str((row or {}).get("content") or "").strip()
+    if not content:
+        return ""
+    marker = "## 声学情绪分布"
+    acoustic = content[content.index(marker):] if marker in content else content
+    return (
+        "\n以下是本次录音的声学情绪识别结果（emotion2vec 逐段分析后聚合，"
+        "与转写文字相互独立）。写纪要时可以据此判断各方态度——例如某个议题上"
+        "负面情绪集中，说明当时存在分歧或抵触。但它只是声学线索，不要单凭它下"
+        "结论，要和转写内容对上才写。\n\n" + acoustic[:4000] + "\n"
+    )
+
+
 def summary_term_hint(rec: dict[str, Any]) -> str:
     """把这场会的背景和专名交给纪要模型。
 
@@ -2926,6 +2932,7 @@ async def call_deepseek_summary(text: str, rec: dict[str, Any]) -> tuple[str, st
     chunk_chars = env_int("AHAMVOICE_SUMMARY_CHUNK_CHARS", 18000, 8000, 28000)
     chunks = [text[i : i + chunk_chars] for i in range(0, len(text), chunk_chars)] or [""]
     depth = summary_depth_instruction(rec, text)
+    acoustic_hint = summary_acoustic_hint(rec)
     partials: list[str] = []
     chat_url = f"{base}/chat/completions"
     async with httpx.AsyncClient(timeout=180, trust_env=False) as client:
@@ -2993,6 +3000,7 @@ async def call_deepseek_summary(text: str, rec: dict[str, Any]) -> tuple[str, st
                         f"录音时长：{rec['duration_label']}\n\n"
                         f"深度要求：{depth}\n"
                         f"{term_hint}"
+                        f"{acoustic_hint}"
                         "写作要求：\n"
                         "- 先给整体判断，再按议题展开细节；不要把所有内容压成三五条。\n"
                         "- 每个重点议题尽量包含：背景/上下文、讨论细节、相关人或客户态度、明确结论、待确认问题、时间戳证据。\n"
@@ -3164,411 +3172,6 @@ async def revise_summary(recording_id: str, instruction: str, user: dict[str, An
             update_task(conn, task_id, "failed", 100, str(exc))
             audit(conn, user, "summary", f"自然语言修改纪要失败：{rec['title']}。")
         raise HTTPException(status_code=500, detail=f"summary revision failed: {exc}") from exc
-
-
-# ---------------------------------------------------------------------------
-# Optional LLM pass: mine a finished transcript for hotwords the recogniser
-# should have known, and for words it probably misheard.
-#
-# Gated on ai_enhance_enabled(). Off, or with no API key, it simply does not
-# run — the transcript itself never depends on it.
-# ---------------------------------------------------------------------------
-
-
-def parse_json_block(raw: str) -> Any:
-    """Pull JSON out of a model reply that may be fenced or prefixed with prose."""
-    text = (raw or "").strip()
-    fence = re.search(r"```(?:json)?\s*(.+?)```", text, re.S)
-    if fence:
-        text = fence.group(1).strip()
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        pass
-    # Fall back to the outermost {...} or [...] the reply contains.
-    for opener, closer in (("[", "]"), ("{", "}")):
-        start = text.find(opener)
-        end = text.rfind(closer)
-        if start >= 0 and end > start:
-            try:
-                return json.loads(text[start : end + 1])
-            except json.JSONDecodeError:
-                continue
-    raise ValueError("模型没有返回可解析的 JSON")
-
-
-def indexed_segments(conn: sqlite3.Connection, recording_id: str) -> list[dict[str, Any]]:
-    rows = rowsdict(
-        conn.execute(
-            """
-            select id, start_sec, end_sec, start_label, speaker, speaker_name, text
-            from transcript_segments where recording_id = ? order by start_sec
-            """,
-            (recording_id,),
-        ).fetchall()
-    )
-    for index, row in enumerate(rows):
-        row["index"] = index
-    return rows
-
-
-def indexed_transcript_text(segments: list[dict[str, Any]]) -> str:
-    lines = []
-    for row in segments:
-        who = row.get("speaker_name") or f"说话人 {row.get('speaker')}"
-        lines.append(f"#{row['index']} [{row['start_label']}] {who}: {row['text']}")
-    return "\n".join(lines)
-
-
-def apply_correction(text: str, wrong: str, right: str) -> tuple[str, int]:
-    """Replace `wrong` with `right`, refusing to cut into a longer latin token.
-
-    The model hands back a bare string, and a bare "MS" also lives inside "WMS":
-    a naive replace turns 「所以这个WMS呢」 into 「所以这个WMES呢」. Both such cases
-    in the 42-minute benchmark were this exact shape. When no boundary-safe
-    occurrence exists we drop the suggestion — not changing beats changing wrong.
-    """
-    if not wrong or wrong == right or wrong not in text:
-        return text, 0
-    if wrong[0].isascii() and wrong[0].isalpha():
-        pattern = re.compile(rf"(?<![A-Za-z]){re.escape(wrong)}(?![A-Za-z])")
-        fixed, count = pattern.subn(right, text)
-        return fixed, count
-    count = text.count(wrong)
-    return text.replace(wrong, right), count
-
-
-async def call_llm_transcript_corrections(
-    rec: dict[str, Any], segments: list[dict[str, Any]], terms: list[str]
-) -> list[dict[str, Any]]:
-    """Ask the model which proper nouns the recogniser misheard.
-
-    It returns replacement pairs, never rewritten text — given the chance to
-    rewrite it would also paraphrase and tidy up, and the transcript would stop
-    being a record of what was said. Constrained this way it cannot: measured on
-    a real 42-minute meeting, all 26 proposals quoted text that existed verbatim.
-
-    Why this rather than phonetic distance: a company name and an ordinary phrase
-    can be near homophones, and only context tells them apart. A phonetic pass
-    rewrote one such phrase into a company name; this pass did not, and it also
-    caught cases no phonetic rule reaches — a badly mangled acronym, or a term
-    written correctly elsewhere in the same meeting.
-    """
-    api_key, base, model = get_llm_config()
-    if not api_key:
-        raise RuntimeError("大模型 API Key 未配置")
-
-    numbered = [f"{index}\t{item['text']}" for index, item in enumerate(segments)]
-    window = env_int("AHAMVOICE_CORRECTION_CHUNK_CHARS", 3000, 800, 12000)
-    chunks: list[list[str]] = []
-    current: list[str] = []
-    size = 0
-    for line in numbered:
-        current.append(line)
-        size += len(line)
-        if size >= window:
-            chunks.append(current)
-            current, size = [], 0
-    if current:
-        chunks.append(current)
-
-    system = (
-        "你是语音转写的校对助手。只纠正被听错的专有名词，绝不改写内容、不润色、"
-        "不补标点、不删口语重复。只输出 JSON。"
-    )
-    collected: list[dict[str, Any]] = []
-    async with httpx.AsyncClient(timeout=300, trust_env=False) as client:
-        for chunk in chunks:
-            payload = {
-                "model": model,
-                "temperature": 0.0,
-                "max_tokens": env_int("AHAMVOICE_CORRECTION_MAX_TOKENS", 8192, 1024, 32768),
-                "messages": [
-                    {"role": "system", "content": system},
-                    {
-                        "role": "user",
-                        "content": (
-                            "下面是会议转写，每行格式 `行号<TAB>内容`。这场会里会出现的专有名词：\n"
-                            + "、".join(terms[:150])
-                            + "\n\n请找出被语音识别听错的专有名词，输出 JSON 数组：\n"
-                            '[{"line": 行号, "from": "稿子里错的原文片段", "to": "正确写法", "why": "判断依据"}]\n\n'
-                            "规则：\n"
-                            "1. from 必须是该行里逐字存在的片段，不能是你改写后的版本。\n"
-                            "2. 只改专有名词（公司名、人名、系统名、英文缩写）。语气词、重复、语法都不要动。\n"
-                            "3. 拿不准就不要输出。宁可漏掉，不要改错。\n"
-                            "4. 没有需要改的就输出 []。\n\n"
-                            + "\n".join(chunk)
-                        ),
-                    },
-                ],
-            }
-            try:
-                reply = await _deepseek_post_with_retry(client, f"{base}/chat/completions", api_key, payload)
-                parsed = parse_json_block(reply)
-            except Exception:
-                continue
-            if isinstance(parsed, dict):
-                parsed = parsed.get("corrections") or []
-            if isinstance(parsed, list):
-                collected.extend(item for item in parsed if isinstance(item, dict))
-    return collected
-
-
-async def correct_transcript_with_llm(recording_id: str, user: dict[str, Any]) -> dict[str, Any]:
-    """Run the correction pass and write back only what applies cleanly."""
-    with db() as conn:
-        rec = can_access_recording(conn, recording_id, user)
-        segments = rowsdict(
-            conn.execute(
-                "select id, text from transcript_segments where recording_id = ? order by start_sec",
-                (recording_id,),
-            ).fetchall()
-        )
-        terms = [
-            str(row["word"])
-            for row in conn.execute(
-                "select word from hotwords where active = 1 order by length(word) desc"
-            ).fetchall()
-        ]
-        terms += [
-            str(row["term"])
-            for row in conn.execute(
-                "select term from recording_hotwords where recording_id = ?", (recording_id,)
-            ).fetchall()
-        ]
-    if not segments or not terms:
-        return {"applied": 0, "proposed": 0, "skipped": 0}
-
-    proposals = await call_llm_transcript_corrections(rec, segments, terms)
-    applied: list[dict[str, Any]] = []
-    skipped: list[dict[str, Any]] = []
-    with db() as conn:
-        for item in proposals:
-            try:
-                index = int(item.get("line"))
-                wrong = str(item.get("from") or "").strip()
-                right = str(item.get("to") or "").strip()
-            except (TypeError, ValueError):
-                continue
-            if not wrong or not right or not (0 <= index < len(segments)):
-                skipped.append({**item, "reason": "行号或字段无效"})
-                continue
-            segment = segments[index]
-            fixed, count = apply_correction(str(segment["text"]), wrong, right)
-            if not count:
-                # 要么原文里没有这个片段（模型改写过），要么只出现在更长的词内部。
-                skipped.append({"from": wrong, "to": right, "reason": "找不到可安全替换的位置"})
-                continue
-            conn.execute("update transcript_segments set text = ? where id = ?", (fixed, segment["id"]))
-            segment["text"] = fixed
-            applied.append({"from": wrong, "to": right, "count": count})
-        if applied:
-            audit(
-                conn,
-                user,
-                "recording.correct",
-                f"转写纠错：{rec['title']}，"
-                + "、".join(f"{item['from']}→{item['to']}" for item in applied[:10])
-                + (f" 等共 {len(applied)} 处" if len(applied) > 10 else f"，共 {len(applied)} 处"),
-            )
-    return {"applied": len(applied), "proposed": len(proposals), "skipped": len(skipped), "items": applied}
-
-
-async def call_llm_hotword_suggestions(
-    rec: dict[str, Any], transcript: str, known: list[str]
-) -> dict[str, list[dict[str, Any]]]:
-    api_key, base, model = get_llm_config()
-    if not api_key:
-        raise RuntimeError("大模型 API Key 未配置")
-    window = env_int("AHAMVOICE_SUGGEST_WINDOW_CHARS", 20000, 6000, 40000)
-    payload = {
-        "model": model,
-        "temperature": 0.1,
-        "max_tokens": env_int("AHAMVOICE_SUGGEST_MAX_TOKENS", 8192, 512, 16384),
-        "messages": [
-            {
-                "role": "system",
-                "content": (
-                    "你从会议转写里找出应该加入语音识别热词表的专有名词，以及疑似被听错的专名。"
-                    "只依据给定文本，不编造。只输出 JSON。"
-                ),
-            },
-            {
-                "role": "user",
-                "content": (
-                    "任务一：找出转写里出现、但不在已有热词表中的专有名词"
-                    "（公司简称、产品名、系统名、项目名、行业术语、英文缩写、人名）。\n"
-                    "任务二：找出疑似被识别错的专名——上下文明显不通、或同一个概念在文中出现多种写法。\n\n"
-                    "输出 JSON：\n"
-                    '{"terms":[{"word":"安灯","reason":"多次出现的车间术语","confidence":0.9}],\n'
-                    ' "corrections":[{"heard":"明远科枝","suggested":"明远科技","reason":"同一家公司在文中另有正确写法"}]}\n\n'
-                    "硬性约束（不满足的不要输出）：\n"
-                    "1. word / suggested 长度 2-8 个字符，不含空格。\n"
-                    "2. 不要输出含“公司/集团/股份/有限/责任”的书面全称，口语里没人这么说。\n"
-                    "3. 不要输出纯数字、型号编号（如 A1、KX-200）。英文缩写（MES、SMT）可以。\n"
-                    "4. 拿不准就不要输出，宁缺毋滥。\n\n"
-                    f"录音标题：{rec.get('title')}\n"
-                    f"已有热词（不要重复）：{', '.join(known[:400])}\n\n"
-                    f"转写：\n{transcript[:window]}"
-                ),
-            },
-        ],
-    }
-    async with httpx.AsyncClient(timeout=180, trust_env=False) as client:
-        reply = await _deepseek_post_with_retry(client, f"{base}/chat/completions", api_key, payload)
-    parsed = parse_json_block(reply)
-    if not isinstance(parsed, dict):
-        raise ValueError("模型返回的不是对象")
-    return {
-        "terms": [item for item in (parsed.get("terms") or []) if isinstance(item, dict)],
-        "corrections": [item for item in (parsed.get("corrections") or []) if isinstance(item, dict)],
-    }
-
-
-async def generate_hotword_suggestions(recording_id: str, user: dict[str, Any]) -> dict[str, Any]:
-    if not ai_enhance_enabled():
-        raise HTTPException(status_code=409, detail="AI 增强已关闭，无法生成建议")
-    with db() as conn:
-        rec = can_access_recording(conn, recording_id, user)
-        transcript = transcript_text(conn, recording_id)
-        known = [str(row["word"]) for row in conn.execute("select word from hotwords where active = 1").fetchall()]
-    if not transcript.strip():
-        raise HTTPException(status_code=409, detail="录音还没有转写结果")
-
-    try:
-        raw = await call_llm_hotword_suggestions(rec, transcript, known)
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"生成建议失败：{exc}") from exc
-
-    known_lower = {word.lower() for word in known}
-    accepted: list[dict[str, Any]] = []
-    rejected: list[dict[str, Any]] = []
-    timestamp = now()
-    with db() as conn:
-        for item in raw["terms"]:
-            word = str(item.get("word") or "").strip()
-            reason = asr_hotword_rejection(word)
-            if word.lower() in known_lower:
-                reason = "已在热词表中"
-            if reason:
-                rejected.append({"word": word, "reason": reason})
-                continue
-            accepted.append(
-                {
-                    "kind": "term",
-                    "heard": "",
-                    "suggested": word,
-                    "reason": str(item.get("reason") or "").strip()[:120],
-                    "confidence": max(0.0, min(1.0, float(item.get("confidence") or 0.6))),
-                }
-            )
-        for item in raw["corrections"]:
-            heard = str(item.get("heard") or "").strip()
-            suggested = str(item.get("suggested") or "").strip()
-            reason = asr_hotword_rejection(suggested)
-            if not heard or heard == suggested:
-                reason = reason or "没有给出被听错的写法"
-            if reason:
-                rejected.append({"word": suggested or heard, "reason": reason})
-                continue
-            accepted.append(
-                {
-                    "kind": "correction",
-                    "heard": heard,
-                    "suggested": suggested,
-                    "reason": str(item.get("reason") or "").strip()[:120],
-                    "confidence": max(0.0, min(1.0, float(item.get("confidence") or 0.7))),
-                }
-            )
-        stored = 0
-        for item in accepted:
-            existing = conn.execute(
-                """
-                select id from hotword_suggestions
-                where recording_id = ? and kind = ? and heard = ? and suggested = ?
-                """,
-                (recording_id, item["kind"], item["heard"], item["suggested"]),
-            ).fetchone()
-            if existing:
-                continue
-            conn.execute(
-                """
-                insert into hotword_suggestions(
-                    id,recording_id,kind,heard,suggested,reason,confidence,status,created_at
-                ) values(?,?,?,?,?,?,?,?,?)
-                """,
-                (
-                    str(uuid.uuid4()),
-                    recording_id,
-                    item["kind"],
-                    item["heard"],
-                    item["suggested"],
-                    item["reason"],
-                    item["confidence"],
-                    "pending",
-                    timestamp,
-                ),
-            )
-            stored += 1
-        audit(
-            conn,
-            user,
-            "hotword.suggest",
-            f"从《{rec['title']}》生成热词建议 {stored} 条（模型给出 {len(accepted) + len(rejected)} 条）。",
-        )
-        pending = rowsdict(
-            conn.execute(
-                "select * from hotword_suggestions where recording_id = ? and status = 'pending' order by created_at desc",
-                (recording_id,),
-            ).fetchall()
-        )
-    return {"stored": stored, "rejected": rejected, "suggestions": pending}
-
-
-def accept_hotword_suggestion(conn: sqlite3.Connection, suggestion_id: str, user: dict[str, Any]) -> dict[str, Any]:
-    row = rowdict(conn.execute("select * from hotword_suggestions where id = ?", (suggestion_id,)).fetchone())
-    if not row:
-        raise HTTPException(status_code=404, detail="suggestion not found")
-    if row["status"] != "pending":
-        raise HTTPException(status_code=409, detail=f"建议已处理：{row['status']}")
-
-    word = str(row["suggested"]).strip()
-    heard = str(row["heard"] or "").strip()
-    timestamp = now()
-    existing = rowdict(conn.execute("select * from hotwords where word = ?", (word,)).fetchone())
-    if existing:
-        # A correction on a word we already track just teaches it a new alias.
-        aliases = [item.strip() for item in str(existing.get("aliases") or "").split(",") if item.strip()]
-        if heard and heard not in aliases:
-            aliases.append(heard)
-            conn.execute(
-                "update hotwords set aliases = ?, updated_at = ? where id = ?",
-                (",".join(aliases), timestamp, existing["id"]),
-            )
-        hotword_id = existing["id"]
-    else:
-        hotword_id = str(uuid.uuid4())
-        conn.execute(
-            """
-            insert into hotwords(
-                id,word,kind,aliases,source,scope,weight,active,state,protected,
-                frequency,confidence,score,first_seen_at,last_seen_at,updated_at
-            ) values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-            """,
-            (
-                hotword_id, word, "业务术语", heard, "AI建议", "global", 6, 1, "active", 0,
-                1, float(row["confidence"] or 0.7), 0, timestamp, timestamp, timestamp,
-            ),
-        )
-        fresh = rowdict(conn.execute("select * from hotwords where id = ?", (hotword_id,)).fetchone())
-        conn.execute("update hotwords set score = ? where id = ?", (hotword_row_score(fresh), hotword_id))
-
-    conn.execute(
-        "update hotword_suggestions set status = 'accepted', decided_at = ? where id = ?",
-        (timestamp, suggestion_id),
-    )
-    audit(conn, user, "hotword.suggest.accept", f"采纳热词建议：{word}{f'（别名 {heard}）' if heard else ''}。")
-    return normalize_hotword(rowdict(conn.execute("select * from hotwords where id = ?", (hotword_id,)).fetchone()))
 
 
 def transcript_markdown(conn: sqlite3.Connection, rec: dict[str, Any]) -> str:
@@ -3871,7 +3474,18 @@ def current_emotion_analysis(conn: sqlite3.Connection, recording_id: str) -> dic
     )
 
 
-def generate_emotion_analysis(recording_id: str, user: dict[str, Any]) -> dict[str, Any]:
+def generate_emotion_analysis(
+    recording_id: str, user: dict[str, Any], with_narrative: bool = True
+) -> dict[str, Any]:
+    """Acoustic emotion per segment, plus an optional written analysis.
+
+    `with_narrative=False` skips the model-written narrative and keeps only the
+    acoustic table. That is what the pipeline uses: the summary wants the raw
+    per-speaker numbers and the strongly negative moments as evidence, and
+    paying for a second model pass to turn them into prose it would then have to
+    read back is a detour. The narrative is generated when someone actually
+    opens the emotion view.
+    """
     with db() as conn:
         rec = can_access_recording(conn, recording_id, user)
         if rec["asr_status"] != "done":
@@ -3891,11 +3505,15 @@ def generate_emotion_analysis(recording_id: str, user: dict[str, Any]) -> dict[s
     try:
         per_segment, per_speaker = analyze_acoustic_emotions(rec, segments)
         acoustic_md = acoustic_markdown(per_speaker, per_segment)
-        with db() as conn:
-            annotated = emotion_annotated_transcript(conn, recording_id, per_segment)
-        analysis_md, model = call_deepseek_emotion(annotated, rec, acoustic_md)
-        content = analysis_md.rstrip() + "\n\n" + acoustic_md + "\n"
-        model_label = f"emotion2vec_plus_large + {model}"
+        if with_narrative:
+            with db() as conn:
+                annotated = emotion_annotated_transcript(conn, recording_id, per_segment)
+            analysis_md, model = call_deepseek_emotion(annotated, rec, acoustic_md)
+            content = analysis_md.rstrip() + "\n\n" + acoustic_md + "\n"
+            model_label = f"emotion2vec_plus_large + {model}"
+        else:
+            content = acoustic_md + "\n"
+            model_label = "emotion2vec_plus_large"
         with db() as conn:
             emotion_id = str(uuid.uuid4())
             conn.execute("update emotion_analyses set is_current = 0 where recording_id = ?", (recording_id,))
@@ -3935,34 +3553,16 @@ def run_emotion_job(recording_id: str, user: dict[str, Any]) -> None:
         pass
 
 
-def run_ai_enhancements(recording_id: str, user: dict[str, Any]) -> None:
-    """Correct misheard proper nouns, then mine the transcript for new hotwords.
-
-    Best effort.
-
-    Deliberately swallows failures: these are extras layered on a transcript the
-    user already has, and a flaky model call must not mark the recording failed.
-    """
-    if not ai_enhance_enabled():
-        return
-    # 校对稿子不在这里自动跑：纪要提示词已经带上专名列表，实测能让纪要写对
-    # 专名而不必先改稿子；而校对一份 42 分钟的稿子要十几分钟和五次调用。
-    # 需要一份干净的逐字稿时（对外发、要检索），用 POST /recordings/{id}/correct
-    # 或 MCP 的 correct_transcript 按需触发。
-    try:
-        asyncio.run(generate_hotword_suggestions(recording_id, user))
-    except Exception as exc:
-        with db() as conn:
-            audit(conn, user, "recording.enhance", f"热词建议失败：{exc}")
-
-
 def process_recording_background(recording_id: str, user: dict[str, Any]) -> None:
     try:
         transcribe_recording(recording_id, user)
-        # Suggestions read the transcript, not the summary, so they run first: a
-        # missing API key or a flaky summary call used to take them down with it
-        # even though they never needed it.
-        run_ai_enhancements(recording_id, user)
+        # 情绪排在纪要之前：纪要要拿它的声学数据。失败不该拖垮纪要——纪要是主
+        # 输出，而情绪只是给它加一层判断依据。
+        try:
+            generate_emotion_analysis(recording_id, user, with_narrative=False)
+        except Exception as exc:
+            with db() as conn:
+                audit(conn, user, "emotion", f"情绪分析失败，纪要将不带声学依据：{exc}")
         asyncio.run(summarize_recording(recording_id, user))
     except HTTPException:
         return
@@ -4074,7 +3674,6 @@ def _settings_view() -> dict[str, Any]:
         "llm_api_base": base,
         "llm_model": model,
         "llm_provider": provider,
-        "ai_enhance": ai_enhance_enabled(),
         "voiceprint_autolearn": voiceprint_autolearn_enabled(),
         # Legacy DeepSeek aliases retained so older frontend code / caches keep
         # working. They mirror the generic values above.
@@ -4125,8 +3724,6 @@ def patch_settings(
     if "llm_provider" in payload:
         updates["llm_provider"] = (payload.get("llm_provider") or "").strip()
 
-    if "ai_enhance" in payload:
-        updates["ai_enhance"] = bool(payload.get("ai_enhance"))
 
     if "voiceprint_autolearn" in payload:
         updates["voiceprint_autolearn"] = bool(payload.get("voiceprint_autolearn"))
@@ -4731,9 +4328,8 @@ def transcribe_api(
     user: dict[str, Any] = Depends(current_user),
 ) -> dict[str, Any]:
     result = transcribe_recording(recording_id, user)
-    # A new transcript deserves a fresh look for terms it got wrong. Queued
-    # rather than inline so the caller is not held for another model round-trip.
-    background_tasks.add_task(run_ai_enhancements, recording_id, dict(user))
+    # 新稿子要配新的情绪数据，否则纪要会拿着上一版的声学依据。
+    background_tasks.add_task(run_emotion_job, recording_id, dict(user))
     return result
 
 
@@ -5831,93 +5427,6 @@ def delete_voiceprint(profile_id: str, user: dict[str, Any] = Depends(current_us
     return {"ok": True, "id": profile_id}
 
 
-@app.post("/api/recordings/{recording_id}/correct")
-async def correct_transcript_api(
-    recording_id: str,
-    user: dict[str, Any] = Depends(current_user),
-) -> dict[str, Any]:
-    """Re-run the proper-noun correction pass over an existing transcript.
-
-    Normally runs on its own after transcription; this is for when hotwords were
-    added afterwards and the transcript deserves another look — far cheaper than
-    re-transcribing.
-    """
-    if not ai_enhance_enabled():
-        raise HTTPException(status_code=409, detail="AI 增强已关闭，无法纠错")
-    return await correct_transcript_with_llm(recording_id, user)
-
-
-@app.get("/api/hotword-suggestions")
-def list_all_hotword_suggestions(
-    status: str = "pending",
-    user: dict[str, Any] = Depends(current_user),
-) -> list[dict[str, Any]]:
-    with db() as conn:
-        if status:
-            rows = conn.execute(
-                """
-                select s.*, r.title as recording_title from hotword_suggestions s
-                left join recordings r on r.id = s.recording_id
-                where s.status = ? order by s.created_at desc limit 500
-                """,
-                (status,),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                """
-                select s.*, r.title as recording_title from hotword_suggestions s
-                left join recordings r on r.id = s.recording_id
-                order by s.created_at desc limit 500
-                """
-            ).fetchall()
-        return rowsdict(rows)
-
-
-@app.get("/api/recordings/{recording_id}/hotword-suggestions")
-def list_hotword_suggestions(
-    recording_id: str,
-    user: dict[str, Any] = Depends(current_user),
-) -> list[dict[str, Any]]:
-    with db() as conn:
-        can_access_recording(conn, recording_id, user)
-        return rowsdict(
-            conn.execute(
-                "select * from hotword_suggestions where recording_id = ? order by created_at desc",
-                (recording_id,),
-            ).fetchall()
-        )
-
-
-@app.post("/api/recordings/{recording_id}/hotword-suggestions")
-async def create_hotword_suggestions(
-    recording_id: str,
-    user: dict[str, Any] = Depends(current_user),
-) -> dict[str, Any]:
-    """Ask the model which proper nouns this transcript should have known, and
-    which ones it probably misheard. Candidates land as pending suggestions —
-    nothing touches the hotword table until a human (or an MCP client) accepts."""
-    return await generate_hotword_suggestions(recording_id, user)
-
-
-@app.post("/api/hotword-suggestions/{suggestion_id}/accept")
-def accept_suggestion(suggestion_id: str, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
-    with db() as conn:
-        return accept_hotword_suggestion(conn, suggestion_id, user)
-
-
-@app.post("/api/hotword-suggestions/{suggestion_id}/reject")
-def reject_suggestion(suggestion_id: str, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
-    with db() as conn:
-        row = rowdict(conn.execute("select * from hotword_suggestions where id = ?", (suggestion_id,)).fetchone())
-        if not row:
-            raise HTTPException(status_code=404, detail="suggestion not found")
-        conn.execute(
-            "update hotword_suggestions set status = 'rejected', decided_at = ? where id = ?",
-            (now(), suggestion_id),
-        )
-        return {"id": suggestion_id, "status": "rejected"}
-
-
 @app.get("/api/mcp/config")
 def mcp_config(user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
     """Everything needed to point an MCP client at this running app.
@@ -5933,10 +5442,7 @@ def mcp_config(user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
         "mcpServers": {
             "aham-voice": {
                 "command": uv_path,
-                "args": [
-                    "run", "--with", "mcp", "--with", "httpx",
-                    "python", str(script),
-                ],
+                "args": ["run", "--with", "mcp", "--with", "httpx", "python", str(script)],
             }
         }
     }
@@ -5950,7 +5456,10 @@ def mcp_config(user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
         "uv_path": uv_path,
         "uv_found": uv_path != "uv",
         "snippet": json.dumps(snippet, ensure_ascii=False, indent=2),
-        "tool_count": 27,
+        # 实时数，别写死——工具增删之后写死的数字只会误导人。
+        "tool_count": (
+            script.read_text(encoding="utf-8").count("@server.tool()") if script.is_file() else 0
+        ),
     }
 
 

@@ -1,7 +1,6 @@
 import { api, getStoredToken } from "./client";
 import type {
   DeleteRecordingResponse,
-  HotwordSuggestion,
   McpConfig,
   Hotword,
   HotwordStatus,
@@ -60,7 +59,6 @@ export async function patchSettings(payload: Partial<{
   llm_api_base: string;
   llm_model: string;
   llm_provider: string;
-  ai_enhance: boolean;
   // Legacy DeepSeek fields, still accepted by the backend for compatibility.
   deepseek_api_key: string;
   deepseek_api_base: string;
@@ -78,32 +76,6 @@ export async function testLlmConnection(payload?: {
   model?: string;
 }): Promise<LlmTestResult> {
   const { data } = await api.post<LlmTestResult>("/settings/test", payload ?? {});
-  return data;
-}
-
-// -------- hotword suggestions (the optional LLM pass) --------
-
-export async function fetchHotwordSuggestions(status = "pending"): Promise<HotwordSuggestion[]> {
-  const { data } = await api.get<HotwordSuggestion[]>("/hotword-suggestions", { params: { status } });
-  return data;
-}
-
-export async function generateHotwordSuggestions(recordingId: string): Promise<{
-  stored: number;
-  rejected: Array<{ word: string; reason: string }>;
-  suggestions: HotwordSuggestion[];
-}> {
-  const { data } = await api.post(`/recordings/${recordingId}/hotword-suggestions`);
-  return data;
-}
-
-export async function acceptHotwordSuggestion(id: string): Promise<Hotword> {
-  const { data } = await api.post<Hotword>(`/hotword-suggestions/${id}/accept`);
-  return data;
-}
-
-export async function rejectHotwordSuggestion(id: string): Promise<{ id: string; status: string }> {
-  const { data } = await api.post(`/hotword-suggestions/${id}/reject`);
   return data;
 }
 
