@@ -779,6 +779,7 @@ def ensure_schema() -> None:
             "last_used_at": "text",
             "expires_at": "text",
             "hit_count": "integer not null default 0",
+            "spoken": "text",
             "updated_at": "text",
         }
         for column, definition in hotword_migrations.items():
@@ -2493,6 +2494,47 @@ def repair_speaker_fragments(items: list[dict[str, Any]]) -> tuple[list[dict[str
     return items, repaired
 
 
+def phonetic_entries(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    """启用中的热词，连同它们的口语形式，喂给音素纠错。
+
+    `spoken` 是用户（或 MCP 客户端）填的读法：MOM 读作「毛姆」，AGV 读作
+    「agv」。没填就退回用词本身——中文专名本来就是按字面读的。
+    """
+    rows = rowsdict(
+        conn.execute(
+            "select word, aliases, spoken from hotwords where active = 1 and coalesce(state,'active') in ('active','protected')"
+        ).fetchall()
+    )
+    entries: list[dict[str, Any]] = []
+    for row in rows:
+        word = str(row.get("word") or "").strip()
+        if len(word) < 2:
+            continue
+        # 只用显式填写的读法，不用别名。别名是描述性的（「制造运营管理」），拿它
+        # 做模糊匹配会把「制造运营阶段」也改掉；别名归精确替换那层管。
+        spoken = [item.strip() for item in str(row.get("spoken") or "").split(",") if item.strip()]
+        entries.append({"display": word, "spoken": spoken or [word]})
+    return entries
+
+
+def apply_phonetic_corrections(conn: sqlite3.Connection, text: str) -> tuple[str, list[dict[str, Any]]]:
+    """Fix proper nouns the recogniser got phonetically close but wrong."""
+    if not env_bool("AHAMVOICE_PHONETIC_CORRECTION", True):
+        return text, []
+    entries = phonetic_entries(conn)
+    if not entries:
+        return text, []
+    try:
+        from . import phonetic
+
+        threshold = env_float("AHAMVOICE_PHONETIC_THRESHOLD", 0.65, 0.5, 0.95)
+        return phonetic.correct(text, entries, threshold=threshold)
+    except Exception as exc:
+        # 纠错失败绝不能让用户丢掉稿子。
+        logging.getLogger("ahamvoice").warning("phonetic correction skipped: %s", exc)
+        return text, []
+
+
 def sentence_info_to_transcript_segments(
     sentence_info: list[dict[str, Any]],
     hotwords: dict[str, str],
@@ -2695,6 +2737,23 @@ def transcribe_recording(recording_id: str, user: dict[str, Any], segment_second
             update_task(conn, task_id, "running", 82)
         speaker_matches = match_speaker_profiles(rec, sentence_info)
         merged_segments = sentence_info_to_transcript_segments(sentence_info, hotwords, speaker_matches)
+        # 音素纠错：把听成近音的专名改回来。放在合并之后、入库之前，存进去的就是
+        # 已纠正的稿子，下游（纪要、导出、MCP）不必各自再来一遍。
+        corrections: list[dict[str, Any]] = []
+        with db() as conn:
+            entries = phonetic_entries(conn)
+        if entries and env_bool("AHAMVOICE_PHONETIC_CORRECTION", True):
+            try:
+                from . import phonetic
+
+                threshold = env_float("AHAMVOICE_PHONETIC_THRESHOLD", 0.65, 0.5, 0.95)
+                for item in merged_segments:
+                    fixed, hits_ph = phonetic.correct(str(item["text"]), entries, threshold=threshold)
+                    if hits_ph:
+                        item["text"] = fixed
+                        corrections.extend(hits_ph)
+            except Exception as exc:
+                logging.getLogger("ahamvoice").warning("phonetic correction skipped: %s", exc)
         with db() as conn:
             update_task(conn, task_id, "running", 90)
             inserted = 0
@@ -2735,7 +2794,15 @@ def transcribe_recording(recording_id: str, user: dict[str, Any], segment_second
                 f"完成录音转写和说话人分离：{rec['title']}，生成 {inserted} 个语义发言段，"
                 f"检测到 {spk_count} 个说话人，使用热词 {package['asr_terms_count']} 条"
                 f"（会前上下文 {package.get('context_terms_count', 0)} 条），"
-                f"命中热词 {hits['global_words']} 个。",
+                f"命中热词 {hits['global_words']} 个"
+                + (
+                    "，音素纠错 "
+                    + "、".join(f"{c['from']}→{c['to']}" for c in corrections[:8])
+                    + (f" 等共 {len(corrections)} 处" if len(corrections) > 8 else f"，共 {len(corrections)} 处")
+                    if corrections
+                    else ""
+                )
+                + "。",
             )
         return {"recording_id": recording_id, "segments": inserted, "speakers": spk_count}
     except Exception as exc:
@@ -2917,12 +2984,22 @@ async def _deepseek_post_with_retry(
                 # Reasoning models bill their thinking against the same
                 # max_tokens budget; when a long prompt makes them think past it,
                 # the API returns 200 with an empty content and the reasoning in
-                # a separate field. Silence here reads like a parse failure three
-                # layers up, so name it.
+                # a separate field. Raising the ceiling is the only fix, so do it
+                # here rather than making every caller guess a budget that works
+                # for both reasoning and non-reasoning models.
                 reasoning = len(message.get("reasoning_content") or "")
+                truncated = choice.get("finish_reason") == "length"
+                budget = int(payload.get("max_tokens") or 0)
+                if truncated and budget and budget < 32768 and attempt < attempts - 1:
+                    payload = {**payload, "max_tokens": min(32768, budget * 2)}
+                    last_error = (
+                        f"空内容，推理占了 {reasoning} 字；把 max_tokens 从 {budget} "
+                        f"提到 {payload['max_tokens']} 后重试"
+                    )
+                    continue
                 raise RuntimeError(
                     "大模型返回空内容"
-                    + (f"（推理占了 {reasoning} 字，max_tokens 预算可能不够）" if reasoning else "")
+                    + (f"（推理占了 {reasoning} 字，max_tokens 预算不够）" if reasoning else "")
                     + f"，finish_reason={choice.get('finish_reason')}"
                 )
             return content
@@ -2950,7 +3027,7 @@ async def call_deepseek_summary(text: str, rec: dict[str, Any]) -> tuple[str, st
             payload = {
                 "model": model,
                 "temperature": 0.2,
-                "max_tokens": env_int("AHAMVOICE_SUMMARY_CHUNK_MAX_TOKENS", 4096, 1200, 8192),
+                "max_tokens": env_int("AHAMVOICE_SUMMARY_CHUNK_MAX_TOKENS", 8192, 1200, 32768),
                 "messages": [
                     {
                         "role": "system",
@@ -2990,7 +3067,7 @@ async def call_deepseek_summary(text: str, rec: dict[str, Any]) -> tuple[str, st
         final_payload = {
             "model": model,
             "temperature": 0.2,
-            "max_tokens": env_int("AHAMVOICE_SUMMARY_FINAL_MAX_TOKENS", 8192, 2000, 12000),
+            "max_tokens": env_int("AHAMVOICE_SUMMARY_FINAL_MAX_TOKENS", 16384, 2000, 32768),
             "messages": [
                 {
                     "role": "system",
@@ -3046,7 +3123,7 @@ async def call_deepseek_revision(instruction: str, base_summary: str, transcript
     payload = {
         "model": model,
         "temperature": 0.2,
-        "max_tokens": env_int("AHAMVOICE_SUMMARY_FINAL_MAX_TOKENS", 8192, 2000, 12000),
+        "max_tokens": env_int("AHAMVOICE_SUMMARY_FINAL_MAX_TOKENS", 16384, 2000, 32768),
         "messages": [
             {
                 "role": "system",
@@ -3666,7 +3743,7 @@ def call_deepseek_emotion(annotated_transcript: str, rec: dict[str, Any], acoust
     payload = {
         "model": model,
         "temperature": 0.3,
-        "max_tokens": env_int("AHAMVOICE_EMOTION_MAX_TOKENS", 6000, 2000, 12000),
+        "max_tokens": env_int("AHAMVOICE_EMOTION_MAX_TOKENS", 12000, 2000, 32768),
         "messages": [
             {
                 "role": "system",
@@ -4807,6 +4884,8 @@ def create_hotword(payload: dict[str, Any], user: dict[str, Any] = Depends(curre
         raise HTTPException(status_code=400, detail="word is required")
     kind = (payload.get("kind") or "term").strip() or "term"
     aliases = (payload.get("aliases") or "").strip()
+    # 口语形式：MOM 读作「毛姆」。ASR 偏置对英文缩写的显示形式无效，纠错靠这个。
+    spoken = (payload.get("spoken") or "").strip()
     scope = (payload.get("scope") or "global").strip() or "global"
     weight = max(1, min(int(payload.get("weight") or 5), 10))
     protected = 1 if payload.get("protected") else 0
@@ -4826,6 +4905,8 @@ def create_hotword(payload: dict[str, Any], user: dict[str, Any] = Depends(curre
             (hid, word, kind, aliases, "manual", scope, weight, 1, "active", protected,
              1, 0.95, 0, ts, ts, ts),
         )
+        if spoken:
+            conn.execute("update hotwords set spoken = ? where id = ?", (spoken, hid))
         row = rowdict(conn.execute("select * from hotwords where id = ?", (hid,)).fetchone())
         conn.execute("update hotwords set score = ? where id = ?", (hotword_row_score(row), hid))
         audit(conn, user, "hotword.create", f"{user['name']} 新增热词：{word}。")

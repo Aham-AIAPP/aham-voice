@@ -3,3 +3,4 @@ uvicorn
 python-multipart
 python-dotenv
 httpx
+pypinyin>=0.53

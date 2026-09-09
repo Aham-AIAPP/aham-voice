@@ -233,6 +233,12 @@ async def add_hotwords(words: list[dict[str, Any]]) -> dict[str, Any]:
 
     每项 {"word": "安灯", "aliases": "安登,安灯系统", "kind": "业务术语", "weight": 6}。
     只影响一场会的词不要加到这里——用 set_recording_context。
+
+    英文缩写务必带 spoken（口语形式），否则救不回来：ASR 偏置对显示形式无效，
+    实测把 "MOM" 当热词与不加热词的输出逐字节相同。转写后的音素纠错靠 spoken
+    工作，一条 {"word": "MOM", "spoken": "毛姆,mom"} 就能同时覆盖
+    冒目 / 冒陌 / 冒某 / POM 这些听错的写法，不必逐个枚举。
+    中文专名可以不填，按字面读即可。
     """
     added: list[dict[str, Any]] = []
     failed: list[dict[str, str]] = []
