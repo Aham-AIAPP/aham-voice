@@ -30,4 +30,5 @@ echo
 exec env \
   RECORDING_AI_HOME="$BASE" \
   AHAMVOICE_BIN_DIR="/opt/homebrew/bin" \
+  AHAMVOICE_PORT="$PORT" \
   "$VENV_PY" -m uvicorn backend.app.main:app --host 127.0.0.1 --port "$PORT"

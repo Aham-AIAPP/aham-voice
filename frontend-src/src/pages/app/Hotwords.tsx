@@ -4,6 +4,7 @@ import { fetchAllHotwordWords, saveAllHotwords } from "@/api/endpoints";
 import { PageHead } from "@/components/PageHead";
 import { Button } from "@/components/Button";
 import { Icon } from "@/components/Icon";
+import { SuggestionsCard } from "./SuggestionsCard";
 import { readApiError } from "@/api/client";
 import axios from "axios";
 
@@ -147,6 +148,8 @@ export function Hotwords() {
               <span>{info}</span>
             </div>
           )}
+
+          <SuggestionsCard />
 
           <label htmlFor="hotwords-text" className="sr-only">
             热词列表（用顿号「、」分隔）

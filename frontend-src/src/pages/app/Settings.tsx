@@ -9,6 +9,7 @@ import { Status } from "@/components/Status";
 import { Diag } from "@/components/Diag";
 import { Icon } from "@/components/Icon";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { ModelsCard } from "./ModelsCard";
 
 // Provider presets. Each base is the full prefix up to /v1 because the backend
 // calls `${base}/chat/completions`. Choosing a preset fills the API Base and a
@@ -151,6 +152,15 @@ export function Settings() {
     },
   });
 
+  const toggleAi = useMutation({
+    mutationFn: (next: boolean) => patchSettings({ ai_enhance: next }),
+    onSuccess: (data) => {
+      qc.setQueryData(["settings"], data);
+      setInfo(data.ai_enhance ? "已开启 AI 增强。" : "已关闭 AI 增强，纪要之外不再调用大模型。");
+    },
+    onError: (err) => setError(readApiError(err)),
+  });
+
   const configured = settings.data?.llm_configured ?? settings.data?.deepseek_configured ?? false;
   const activePreset = PROVIDERS.find((p) => p.key === provider);
 
@@ -255,6 +265,31 @@ export function Settings() {
           {error && <Diag code="SET_E">{error}</Diag>}
           {info && <Diag code="SET_OK" tone="info">{info}</Diag>}
         </section>
+
+          <section className="card stack-card">
+            <div className="row">
+              <h3 className="text-subhead form-section__title">AI 增强</h3>
+              <Status tone={settings.data?.ai_enhance ? "moss" : "muted"}>
+                {settings.data?.ai_enhance ? "已开启" : "已关闭"}
+              </Status>
+            </div>
+            <p className="text-caption t-2" style={{ margin: 0 }}>
+              开启后，除了会议纪要，转写完成的文稿还会额外送给你配置的大模型做一次分析（议题分章、术语与疑似听错的词的建议）。
+              关掉则只保留纪要，其余全部走本地规则。音频始终不上传。
+            </p>
+            <div className="row">
+              <Button
+                variant={settings.data?.ai_enhance ? "secondary" : "primary"}
+                size="sm"
+                loading={toggleAi.isPending}
+                onClick={() => { setError(null); setInfo(null); toggleAi.mutate(!settings.data?.ai_enhance); }}
+              >
+                {settings.data?.ai_enhance ? "关闭 AI 增强" : "开启 AI 增强"}
+              </Button>
+            </div>
+          </section>
+
+          <ModelsCard />
         </div>
       </div>
 

@@ -44,6 +44,9 @@ if (_bundle_dist / "index.html").exists():
     os.environ.setdefault("AHAMVOICE_FRONTEND_DIR", str(_bundle_dist))
 
 
+DEFAULT_PORT = 8766  # 8765 is the dev script's port; keep them apart.
+
+
 def _free_port() -> int:
     # Bind to 0 to let the OS pick an open port, then hand it to uvicorn.
     # Avoid 5173/5174 so the frontend's deriveBaseURL() uses a relative /api.
@@ -51,6 +54,28 @@ def _free_port() -> int:
         s.bind(("127.0.0.1", 0))
         port = s.getsockname()[1]
     return port
+
+
+def _port_is_free(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            s.bind(("127.0.0.1", port))
+        except OSError:
+            return False
+    return True
+
+
+def _pick_port() -> int:
+    """Prefer a stable port so external clients (the MCP server, scripts) can
+    reconnect across restarts; fall back to any free one if it is taken. Either
+    way the chosen port is published in runtime.json by the backend."""
+    requested = os.environ.get("AHAMVOICE_PORT", "").strip()
+    if requested.isdigit() and _port_is_free(int(requested)):
+        return int(requested)
+    if _port_is_free(DEFAULT_PORT):
+        return DEFAULT_PORT
+    return _free_port()
 
 
 def _wait_until_up(port: int, timeout: float = 90.0) -> bool:
@@ -102,7 +127,9 @@ class _DesktopApi:
 def main() -> int:
     import uvicorn
 
-    port = _free_port()
+    port = _pick_port()
+    # The backend reads this on startup and publishes runtime.json from it.
+    os.environ["AHAMVOICE_PORT"] = str(port)
     config = uvicorn.Config(
         "backend.app.main:app",
         host="127.0.0.1",
@@ -138,6 +165,10 @@ def main() -> int:
     # Window closed → shut the server down and exit.
     server.should_exit = True
     thread.join(timeout=5)
+    backend = sys.modules.get("backend.app.main")
+    if backend is not None:
+        # Stop advertising a port nothing is listening on any more.
+        backend.clear_runtime_file()
     return 0
 
 

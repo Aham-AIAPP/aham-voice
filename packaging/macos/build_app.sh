@@ -2,9 +2,19 @@
 # Build a self-contained AhamVoice.app for macOS (Apple Silicon / arm64).
 #
 # Produces a clickable, copy-anywhere app with the Python runtime, all
-# dependencies (torch/funasr/modelscope/...), the 5 local models and a static
-# ffmpeg bundled inside. The target Mac needs NO downloads — only a DeepSeek
-# API key entered on first run (Settings page) to enable meeting summaries.
+# dependencies (torch/funasr/modelscope/...), the local models and a static
+# ffmpeg bundled inside.
+#
+# Two shapes, same code:
+#   full (default)          ~5.6GB app — every model inside, works offline on a
+#                           clean Mac with no downloads at all.
+#   AHAMVOICE_SKIP_MODELS=1 ~1.6GB app — no models; the app fetches them on
+#                           first run from 设置 → 本地模型. This is the one to
+#                           publish: it fits GitHub's 2GB per-asset limit as a
+#                           single file, so releases no longer need splitting.
+#
+# Either way the user still enters their own LLM API key on the Settings page
+# to enable meeting summaries.
 #
 # Output: $BUILD_DIR/AhamVoice.app  and  $BUILD_DIR/AhamVoice.dmg
 #
@@ -37,11 +47,18 @@ PY_TAG="3.12"
 echo "==> AhamVoice macOS bundle"
 echo "    repo:   $REPO"
 echo "    build:  $BUILD_DIR"
-echo "    models: $MODELS_SRC"
+if [[ "${AHAMVOICE_SKIP_MODELS:-0}" == "1" ]]; then
+  echo "    models: (skipped — app downloads them on first run)"
+else
+  echo "    models: $MODELS_SRC"
+fi
 
 # ---- preflight -------------------------------------------------------------
 [[ "$(uname -m)" == "arm64" ]] || { echo "ERROR: build host must be arm64"; exit 1; }
-[[ -d "$MODELS_SRC" ]] || { echo "ERROR: models dir not found: $MODELS_SRC"; exit 1; }
+SKIP_MODELS="${AHAMVOICE_SKIP_MODELS:-0}"
+if [[ "$SKIP_MODELS" != "1" ]]; then
+  [[ -d "$MODELS_SRC" ]] || { echo "ERROR: models dir not found: $MODELS_SRC"; exit 1; }
+fi
 command -v npm >/dev/null || { echo "ERROR: npm not found"; exit 1; }
 command -v install_name_tool >/dev/null || { echo "ERROR: Xcode CLT (install_name_tool) missing"; exit 1; }
 
@@ -82,11 +99,23 @@ mkdir -p "$RES/app"
 mkdir -p "$RES/app/frontend"
 /usr/bin/rsync -a "$REPO/frontend/dist" "$RES/app/frontend/"
 cp "$REPO/app_launcher.py" "$RES/app/app_launcher.py"
+# MCP server: ships with the bundle so an installed .app (no repo checkout) can
+# still be pointed at from Claude Desktop. It runs in the client's own Python,
+# not ours — see docs/MCP.md.
+/usr/bin/rsync -a --exclude "__pycache__" "$REPO/mcp-server" "$RES/app/"
 
 # ---- 4. copy models --------------------------------------------------------
-echo "==> [4/8] copying models (~4GB, this takes a while)"
-mkdir -p "$RES/models/modelscope/iic"
-/usr/bin/rsync -a "$MODELS_SRC/" "$RES/models/modelscope/iic/"
+if [[ "$SKIP_MODELS" == "1" ]]; then
+  echo "==> [4/8] skipping models (slim build)"
+  # Still create the directory: app_launcher.py only points the backend at the
+  # bundle's model dir when it exists, and the in-app downloader writes to the
+  # per-user dir either way. An empty dir here keeps both paths predictable.
+  mkdir -p "$RES/models/modelscope/iic"
+else
+  echo "==> [4/8] copying models (~4GB, this takes a while)"
+  mkdir -p "$RES/models/modelscope/iic"
+  /usr/bin/rsync -a "$MODELS_SRC/" "$RES/models/modelscope/iic/"
+fi
 
 # ---- 5. bundle a self-contained ffmpeg ------------------------------------
 echo "==> [5/8] bundling ffmpeg + relocating dylibs"

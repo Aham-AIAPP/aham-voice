@@ -289,9 +289,43 @@ export interface EmotionAnalysis {
   is_current: number;
 }
 
+// One topic chapter cut out of the transcript. `source` is "llm" when a model
+// did the cutting and "rule" when it fell back to pauses + length locally.
+export interface Chapter {
+  id: string;
+  recording_id: string;
+  version: number;
+  idx: number;
+  start_sec: number;
+  end_sec: number;
+  start_label: string;
+  title: string;
+  gist: string;
+  source: string;
+  created_at: string;
+}
+
+// A pending proposal for the hotword table. kind="term" is a new word;
+// kind="correction" means `heard` should have been `suggested`, and accepting it
+// files `heard` as an alias so the next transcript gets it right.
+export interface HotwordSuggestion {
+  id: string;
+  recording_id: string | null;
+  recording_title?: string | null;
+  kind: "term" | "correction";
+  heard: string;
+  suggested: string;
+  reason: string;
+  confidence: number;
+  status: "pending" | "accepted" | "rejected";
+  created_at: string;
+  decided_at: string | null;
+}
+
 export interface RecordingDetail {
   recording: Recording;
   segments: TranscriptSegment[];
+  chapters: Chapter[];
   summary: Summary | null;
   summaries: Summary[];
   emotion_analysis: EmotionAnalysis | null;
@@ -327,6 +361,51 @@ export interface Settings {
   deepseek_configured: boolean;
   deepseek_api_base: string;
   deepseek_model: string;
+  // Master switch for the optional LLM passes (章节、术语建议). Off keeps
+  // everything beyond the summary on this machine.
+  ai_enhance: boolean;
+}
+
+// One local model in the download manager. `status` is derived from the remote
+// file listing, not from "does the folder exist" — a half-downloaded model looks
+// identical on disk to a finished one.
+export type ModelStatus = "missing" | "partial" | "ready" | "downloading" | "queued";
+
+export interface ModelProgress {
+  status: string;
+  transferred_bytes: number;
+  current_file: string;
+  speed_bps: number;
+  error: string;
+  downloaded_bytes: number;
+  total_bytes: number;
+  percent: number;
+}
+
+export interface ModelInfo {
+  key: string;
+  model_id: string;
+  label: string;
+  purpose: string;
+  required: boolean;
+  path: string;
+  /** Ships inside the .app bundle: read-only, cannot be deleted or re-downloaded. */
+  bundled: boolean;
+  local_bytes: number;
+  total_bytes: number;
+  verified: boolean;
+  missing_files: string[];
+  status: ModelStatus;
+  progress?: ModelProgress;
+}
+
+export interface ModelsStatus {
+  models: ModelInfo[];
+  ready: boolean;
+  required_missing: string[];
+  total_bytes: number;
+  local_bytes: number;
+  downloading: string[];
 }
 
 // Result of POST /api/settings/test — a live probe of the LLM endpoint.

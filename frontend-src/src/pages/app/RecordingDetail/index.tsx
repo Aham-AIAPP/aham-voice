@@ -13,6 +13,7 @@ import { formatRelative } from "@/utils/format";
 import { overallLabel } from "@/utils/status";
 import { RecordingCard } from "./RecordingCard";
 import { SpeakersCard } from "./SpeakersCard";
+import { ChaptersCard } from "./ChaptersCard";
 import { Timeline } from "./Timeline";
 import { Preview, TRANSCRIPT_KEY, EMOTION_KEY, summaryArtifactKey, type ArtifactKey } from "./Preview";
 import { ReviseComposer } from "./ReviseComposer";
@@ -188,6 +189,12 @@ export function RecordingDetail() {
             <RecordingCard recording={rec} segments={segments} hotwordPackage={pkg} />
 
             <SpeakersCard recordingId={recordingId} asrStatus={rec.asr_status} />
+
+            <ChaptersCard
+              recordingId={recordingId}
+              chapters={detail.data?.chapters ?? []}
+              asrStatus={rec.asr_status}
+            />
 
             <Timeline
               recording={rec}

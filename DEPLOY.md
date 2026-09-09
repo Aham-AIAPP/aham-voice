@@ -55,6 +55,9 @@ modelscope 1.37 等），arm64 上 pip 会直接装到 CPU/MPS 版 torch。
 
 ## 3. 下载 5 个本地模型（约 4GB）
 
+> 从应用里下也行：打开「设置 → 本地模型」，那里能看到每个模型的完整性和下载进度，
+> 支持断点续传。命令行方式适合无界面部署或批量预置。
+
 全部来自 ModelScope 的 `iic` 命名空间，必须放到
 `$BASE/models/modelscope/iic/<模型名>`（目录名要和下面完全一致）。
 `modelscope` CLI 在第 2 步已随依赖装好：

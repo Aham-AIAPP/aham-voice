@@ -1,6 +1,8 @@
 import { api, getStoredToken } from "./client";
 import type {
+  Chapter,
   DeleteRecordingResponse,
+  HotwordSuggestion,
   Hotword,
   HotwordStatus,
   LlmTestResult,
@@ -9,6 +11,8 @@ import type {
   RecordingDetail,
   SaveAllHotwordsResponse,
   SpeakerCandidate,
+  ModelInfo,
+  ModelsStatus,
   Settings,
   SystemStatus,
   User,
@@ -56,6 +60,7 @@ export async function patchSettings(payload: Partial<{
   llm_api_base: string;
   llm_model: string;
   llm_provider: string;
+  ai_enhance: boolean;
   // Legacy DeepSeek fields, still accepted by the backend for compatibility.
   deepseek_api_key: string;
   deepseek_api_base: string;
@@ -73,6 +78,72 @@ export async function testLlmConnection(payload?: {
   model?: string;
 }): Promise<LlmTestResult> {
   const { data } = await api.post<LlmTestResult>("/settings/test", payload ?? {});
+  return data;
+}
+
+// -------- chapters + hotword suggestions (the optional LLM passes) --------
+
+export async function fetchChapters(recordingId: string): Promise<{ chapters: Chapter[] }> {
+  const { data } = await api.get<{ chapters: Chapter[] }>(`/recordings/${recordingId}/chapters`);
+  return data;
+}
+
+export async function regenerateChapters(
+  recordingId: string,
+  instruction = "",
+): Promise<{ chapters: Chapter[]; source: string; version: number }> {
+  const { data } = await api.post(`/recordings/${recordingId}/chapters`, { instruction });
+  return data;
+}
+
+export async function fetchHotwordSuggestions(status = "pending"): Promise<HotwordSuggestion[]> {
+  const { data } = await api.get<HotwordSuggestion[]>("/hotword-suggestions", { params: { status } });
+  return data;
+}
+
+export async function generateHotwordSuggestions(recordingId: string): Promise<{
+  stored: number;
+  rejected: Array<{ word: string; reason: string }>;
+  suggestions: HotwordSuggestion[];
+}> {
+  const { data } = await api.post(`/recordings/${recordingId}/hotword-suggestions`);
+  return data;
+}
+
+export async function acceptHotwordSuggestion(id: string): Promise<Hotword> {
+  const { data } = await api.post<Hotword>(`/hotword-suggestions/${id}/accept`);
+  return data;
+}
+
+export async function rejectHotwordSuggestion(id: string): Promise<{ id: string; status: string }> {
+  const { data } = await api.post(`/hotword-suggestions/${id}/reject`);
+  return data;
+}
+
+// -------- local models (first-run download manager) --------
+
+export async function fetchModels(refresh = false): Promise<ModelsStatus> {
+  const { data } = await api.get<ModelsStatus>("/models", { params: refresh ? { refresh: true } : {} });
+  return data;
+}
+
+export async function downloadModel(key: string): Promise<ModelInfo> {
+  const { data } = await api.post<ModelInfo>(`/models/${key}/download`);
+  return data;
+}
+
+export async function downloadAllModels(includeOptional: boolean): Promise<ModelsStatus> {
+  const { data } = await api.post<ModelsStatus>("/models/download", { include_optional: includeOptional });
+  return data;
+}
+
+export async function cancelModelDownload(key: string): Promise<ModelInfo> {
+  const { data } = await api.post<ModelInfo>(`/models/${key}/cancel`);
+  return data;
+}
+
+export async function deleteModel(key: string): Promise<ModelInfo> {
+  const { data } = await api.delete<ModelInfo>(`/models/${key}`);
   return data;
 }
 
