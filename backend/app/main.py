@@ -1478,7 +1478,11 @@ def hotword_row_score(row: dict[str, Any], rec: dict[str, Any] | None = None, us
 
 def hotword_limits() -> dict[str, int]:
     return {
-        "asr": env_int("AHAMVOICE_HOTWORD_LIMIT", 3000, 200, 6000),
+        # SeACo keeps only the top `nfilter` (50, hardcoded in funasr) hotwords
+        # per utterance, so a longer list buys nothing. Measured on a 10-minute
+        # meeting: 3000 terms cost 49% more wall time than none and made the
+        # transcript worse, while 20 and 3000 produced the same target recall.
+        "asr": env_int("AHAMVOICE_HOTWORD_LIMIT", 60, 10, 6000),
         "correction": env_int("AHAMVOICE_CORRECTION_HOTWORD_LIMIT", 10000, 1000, 20000),
         "protected": env_int("AHAMVOICE_PROTECTED_HOTWORD_LIMIT", 1200, 100, 5000),
     }
@@ -2037,6 +2041,22 @@ def match_speaker_profiles(rec: dict[str, Any], sentence_info: list[dict[str, An
 _FORMAL_ORG_MARKER = re.compile(r"(公司|集团|股份|有限|责任)")
 
 
+def common_word_frequency(text: str) -> int | None:
+    """How common this word is in jieba's dictionary; None means it is not in it.
+
+    Used to keep ordinary vocabulary out of the ASR hotword list. Rare or unknown
+    words are exactly the ones worth biasing toward; common ones are words the
+    recogniser already gets right.
+    """
+    try:
+        import jieba
+
+        jieba.initialize()
+        return jieba.get_FREQ(text)
+    except Exception:
+        return None
+
+
 def asr_hotword_rejection(text: str) -> str | None:
     """Why seaco would not accept this term as a hotword, or None if it would.
 
@@ -2059,6 +2079,13 @@ def asr_hotword_rejection(text: str) -> str | None:
         return "看起来像编号/代码，ASR 偏置对它无效"
     if _FORMAL_ORG_MARKER.search(value):
         return "含「公司/集团/股份/有限/责任」等书面组织词，口语里没人说全称"
+    frequency = common_word_frequency(value)
+    if frequency is not None and frequency >= env_int("AHAMVOICE_HOTWORD_MAX_FREQ", 500, 0, 200000):
+        # Measured on a real meeting: with 产品/会议/场景 in the list, seaco
+        # rewrote four correct 「场景」 into 「产品」 and one 「不一」 into 「会议」.
+        # A hotword only ever pulls the decoder toward itself, so a word the
+        # model already knows can do nothing but overwrite correct text.
+        return f"「{value}」是常用词（词频 {frequency}），作热词只会覆盖正确的字，请用专有名词"
     return None
 
 
