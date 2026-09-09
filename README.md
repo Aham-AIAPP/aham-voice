@@ -18,7 +18,7 @@ Aham Voice 为此而做：把整条链路在一台 Mac 上接完整——转写�
 
 - **本地优先** — 转写（FunASR）、说话人分离（CAM++）、声学情绪（emotion2vec）全部本地离线，音频不上传。
 - **自行配置 LLM Key** — 纪要与情绪语义走云端大模型，用你自己的 OpenAI 兼容接口，Key 仅存本机。
-- **单机克制** — 无登录、无多用户、无外部集成；一个自包含的 macOS 应用，装上就能用。
+- **单机克制** — 无登录、无多用户、不联网同步；一个自包含的 macOS 应用，装上就能用。
 - **一体成稿** — 从录音到分说话人的逐句稿，再到结构化纪要，一条流水线走完。
 
 > 简言之：把「录音 → 纪要」做利落的单机 Mac 应用，隐私留本机，成稿交给你信任的模型。
@@ -29,8 +29,10 @@ Aham Voice 为此而做：把整条链路在一台 Mac 上接完整——转写�
 - **说话人分离** — CAM++ 声纹，逐句标注谁在说；声纹可管理。
 - **声学情绪** — emotion2vec 本地情绪标注。
 - **AI 会议纪要** — 云端大模型成稿，可按自然语言重写；附情绪语义分析。
-- **热词** — 「热词」页手动增删，或「导入 txt」批量导入。
-- **单机** — 无登录、无多用户、无外部集成，配置只存本机。
+- **热词** — 「热词」页手动增删，或「导入 txt」批量导入；转写后会从稿子里挖出该加的词和疑似听错的专名，等你确认。
+- **议题章节** — 逐句稿按议题分章，可用自然语言重分（「按客户分章」「分细一点」）。
+- **接 AI 助手（可选）** — 内置 MCP 服务，Claude Desktop 等客户端可在本机驱动它：开始转写、读结果、为某次会议定制热词、管声纹。全程 127.0.0.1，见 [docs/MCP.md](docs/MCP.md)。
+- **单机** — 无登录、无多用户、不联网同步，配置只存本机。
 
 ## 预览
 
@@ -55,13 +57,15 @@ Aham Voice 为此而做：把整条链路在一台 Mac 上接完整——转写�
 
 ## 开始使用
 
-到 [Releases](https://github.com/Aham-AIAPP/aham-voice/releases/latest) 下载（仅 Apple Silicon）。DMG 内置模型、体积大，按 GitHub 单文件上限分卷上传，下载全部分卷后在同一目录合并：
+到 [Releases](https://github.com/Aham-AIAPP/aham-voice/releases/latest) 下载（仅 Apple Silicon）。默认给**精简版**：不含模型，单个 DMG，首次打开在「设置 → 本地模型」一键下载（约 2.1 GB，可中断续传）。
+
+想装完就能离线用、不下任何东西，选**完整版**：模型全部内置，体积大，按 GitHub 单文件上限分卷上传，下载全部分卷后在同一目录合并：
 
 ```bash
 cat AhamVoice-*.dmg.* > "Aham Voice.dmg"
 ```
 
-拖 Aham Voice 到「应用程序」→ 首次运行 `xattr -dr com.apple.quarantine /Applications/AhamVoice.app` 解除隔离 → 在「设置」填 OpenAI 兼容 API Key 即可。从源码构建 / 打包流程见 [DEPLOY.md](DEPLOY.md)。
+两者都是：拖 Aham Voice 到「应用程序」→ 首次运行 `xattr -dr com.apple.quarantine /Applications/AhamVoice.app` 解除隔离 → 在「设置」填 OpenAI 兼容 API Key 即可。从源码构建 / 打包流程见 [DEPLOY.md](DEPLOY.md)。
 
 ---
 
