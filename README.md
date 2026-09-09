@@ -65,7 +65,7 @@ Aham Voice 为此而做：把整条链路在一台 Mac 上接完整——转写�
 cat AhamVoice-*.dmg.* > "Aham Voice.dmg"
 ```
 
-两者都是：拖 Aham Voice 到「应用程序」→ 首次运行 `xattr -dr com.apple.quarantine /Applications/AhamVoice.app` 解除隔离 → 在「设置」填 OpenAI 兼容 API Key 即可。从源码构建 / 打包流程见 [DEPLOY.md](DEPLOY.md)。
+两者都是：拖 Aham Voice 到「应用程序」→ 首次运行 `xattr -dr com.apple.quarantine "/Applications/Aham Voice.app"` 解除隔离 → 在「设置」填 OpenAI 兼容 API Key 即可。从源码构建 / 打包流程见 [DEPLOY.md](DEPLOY.md)。
 
 ---
 

@@ -10,6 +10,7 @@ import { Diag } from "@/components/Diag";
 import { Icon } from "@/components/Icon";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { ModelsCard } from "./ModelsCard";
+import { McpCard } from "./McpCard";
 
 // Provider presets. Each base is the full prefix up to /v1 because the backend
 // calls `${base}/chat/completions`. Choosing a preset fills the API Base and a
@@ -290,6 +291,8 @@ export function Settings() {
           </section>
 
           <ModelsCard />
+
+          <McpCard />
         </div>
       </div>
 

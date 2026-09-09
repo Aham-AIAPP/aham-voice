@@ -5946,6 +5946,42 @@ def reject_suggestion(suggestion_id: str, user: dict[str, Any] = Depends(current
         return {"id": suggestion_id, "status": "rejected"}
 
 
+@app.get("/api/mcp/config")
+def mcp_config(user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+    """Everything needed to point an MCP client at this running app.
+
+    Paths are resolved here rather than documented, because they differ between
+    a dev checkout and an installed .app — and the bundle path contains a space,
+    which is exactly the kind of thing a hand-copied doc gets wrong.
+    """
+    script = ROOT / "mcp-server" / "aham_voice_mcp.py"
+    uv_candidates = [Path.home() / ".local" / "bin" / "uv", Path("/opt/homebrew/bin/uv")]
+    uv_path = next((str(item) for item in uv_candidates if item.exists()), "uv")
+    snippet = {
+        "mcpServers": {
+            "aham-voice": {
+                "command": uv_path,
+                "args": [
+                    "run", "--with", "mcp", "--with", "httpx",
+                    "python", str(script),
+                ],
+            }
+        }
+    }
+    return {
+        "script_path": str(script),
+        "script_exists": script.is_file(),
+        "runtime_path": str(RUNTIME_PATH),
+        "client_config_path": str(
+            Path.home() / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json"
+        ),
+        "uv_path": uv_path,
+        "uv_found": uv_path != "uv",
+        "snippet": json.dumps(snippet, ensure_ascii=False, indent=2),
+        "tool_count": 27,
+    }
+
+
 @app.get("/api/models")
 def list_models(refresh: bool = False, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
     """Local model inventory: what is needed, what is on disk, how complete it

@@ -399,6 +399,19 @@ export interface ModelInfo {
   progress?: ModelProgress;
 }
 
+// Resolved MCP wiring for this install — paths differ between a dev checkout
+// and the .app bundle, so the backend computes them.
+export interface McpConfig {
+  script_path: string;
+  script_exists: boolean;
+  runtime_path: string;
+  client_config_path: string;
+  uv_path: string;
+  uv_found: boolean;
+  snippet: string;
+  tool_count: number;
+}
+
 export interface ModelsStatus {
   models: ModelInfo[];
   ready: boolean;

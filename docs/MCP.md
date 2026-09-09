@@ -20,6 +20,9 @@ uv run --with mcp --with httpx python /绝对路径/aham-voice/mcp-server/aham_v
 
 ## 配置 Claude Desktop
 
+> 最省事的办法：打开 Aham Voice →「设置 → 接 AI 助手（MCP）」，那里会按你这台机器的真实路径生成好配置，点一下复制即可。下面是手写版。
+
+
 编辑 `~/Library/Application Support/Claude/claude_desktop_config.json`：
 
 ```json
@@ -54,7 +57,7 @@ uv run --with mcp --with httpx python /绝对路径/aham-voice/mcp-server/aham_v
 装的是 DMG 版、没有源码仓库时，脚本在应用包里：
 
 ```
-/Applications/AhamVoice.app/Contents/Resources/app/mcp-server/aham_voice_mcp.py
+/Applications/Aham\ Voice.app/Contents/Resources/app/mcp-server/aham_voice_mcp.py
 ```
 
 ## 典型用法：带背景的转写

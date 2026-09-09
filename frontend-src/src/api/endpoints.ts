@@ -3,6 +3,7 @@ import type {
   Chapter,
   DeleteRecordingResponse,
   HotwordSuggestion,
+  McpConfig,
   Hotword,
   HotwordStatus,
   LlmTestResult,
@@ -117,6 +118,11 @@ export async function acceptHotwordSuggestion(id: string): Promise<Hotword> {
 
 export async function rejectHotwordSuggestion(id: string): Promise<{ id: string; status: string }> {
   const { data } = await api.post(`/hotword-suggestions/${id}/reject`);
+  return data;
+}
+
+export async function fetchMcpConfig(): Promise<McpConfig> {
+  const { data } = await api.get<McpConfig>("/mcp/config");
   return data;
 }
 

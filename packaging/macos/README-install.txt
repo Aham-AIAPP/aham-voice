@@ -5,7 +5,7 @@ AhamVoice 安装说明（macOS · Apple Silicon）
 2. 第一次打开前，因为这个 app 没有 Apple 付费签名，需要解除隔离：
    打开「终端」(Terminal)，粘贴并回车：
 
-       xattr -dr com.apple.quarantine /Applications/AhamVoice.app
+       xattr -dr com.apple.quarantine "/Applications/Aham Voice.app"
 
    （或者：在「应用程序」里右键点 AhamVoice → 打开 → 再点「打开」。）
 
