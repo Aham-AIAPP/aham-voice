@@ -1,6 +1,5 @@
 import { api, getStoredToken } from "./client";
 import type {
-  Chapter,
   DeleteRecordingResponse,
   HotwordSuggestion,
   McpConfig,
@@ -82,20 +81,7 @@ export async function testLlmConnection(payload?: {
   return data;
 }
 
-// -------- chapters + hotword suggestions (the optional LLM passes) --------
-
-export async function fetchChapters(recordingId: string): Promise<{ chapters: Chapter[] }> {
-  const { data } = await api.get<{ chapters: Chapter[] }>(`/recordings/${recordingId}/chapters`);
-  return data;
-}
-
-export async function regenerateChapters(
-  recordingId: string,
-  instruction = "",
-): Promise<{ chapters: Chapter[]; source: string; version: number }> {
-  const { data } = await api.post(`/recordings/${recordingId}/chapters`, { instruction });
-  return data;
-}
+// -------- hotword suggestions (the optional LLM pass) --------
 
 export async function fetchHotwordSuggestions(status = "pending"): Promise<HotwordSuggestion[]> {
   const { data } = await api.get<HotwordSuggestion[]>("/hotword-suggestions", { params: { status } });

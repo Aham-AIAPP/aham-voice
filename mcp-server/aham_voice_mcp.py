@@ -247,26 +247,6 @@ async def add_hotwords(words: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 @server.tool()
-async def get_chapters(recording_id: str) -> dict[str, Any]:
-    """读取一段录音的议题章节（每章带起止时间、标题、一句话要点）。
-
-    先看章节再决定要不要读全文，比一次性拉几万字的逐句稿省得多。
-    """
-    return await _call("GET", f"/api/recordings/{recording_id}/chapters")
-
-
-@server.tool()
-async def regenerate_chapters(recording_id: str, instruction: str = "") -> dict[str, Any]:
-    """重新给录音分章，可以用自然语言指定怎么分。
-
-    instruction 例子："按客户分章"、"分得细一点"、"把寒暄合并掉"。
-    每次重分都会存成新版本，不会覆盖上一次的结果。
-    需要「设置 → AI 增强」开着；关掉时会退回本地规则分段（按停顿和长度切）。
-    """
-    return await _call("POST", f"/api/recordings/{recording_id}/chapters", json={"instruction": instruction})
-
-
-@server.tool()
 async def suggest_hotwords(recording_id: str) -> dict[str, Any]:
     """从一段转写里挖掘该加的热词，以及疑似被听错的专名。
 

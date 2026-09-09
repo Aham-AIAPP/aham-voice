@@ -184,9 +184,9 @@ def voiceprint_autolearn_enabled() -> bool:
 
 
 def ai_enhance_enabled() -> bool:
-    """Master switch for the optional LLM passes (chapters, term/mishearing
-    suggestions). Off means the app falls back to the local rule-based path and
-    nothing beyond the existing summary leaves the machine."""
+    """Master switch for the optional LLM pass that mines finished transcripts
+    for hotwords it got wrong. Off means nothing beyond the existing summary
+    leaves the machine."""
     raw = os.environ.get("AHAMVOICE_AI_ENHANCE")
     if raw is not None:
         return raw.strip().lower() not in {"", "0", "false", "no", "off"}
@@ -641,21 +641,6 @@ def ensure_schema() -> None:
                 vector text not null,
                 created_at text not null
             );
-            create table if not exists transcript_chapters (
-                id text primary key,
-                recording_id text not null,
-                version integer not null default 1,
-                idx integer not null,
-                start_sec real not null,
-                end_sec real not null,
-                start_label text not null,
-                title text not null,
-                gist text not null default '',
-                source text not null default 'llm',
-                created_at text not null
-            );
-            create index if not exists idx_chapters_rec
-                on transcript_chapters(recording_id, version, idx);
             create table if not exists hotword_suggestions (
                 id text primary key,
                 recording_id text,
@@ -2898,7 +2883,22 @@ async def _deepseek_post_with_retry(
             break
         if res.status_code < 400:
             data = res.json()
-            return data["choices"][0]["message"]["content"]
+            choice = (data.get("choices") or [{}])[0]
+            message = choice.get("message") or {}
+            content = message.get("content") or ""
+            if not content.strip():
+                # Reasoning models bill their thinking against the same
+                # max_tokens budget; when a long prompt makes them think past it,
+                # the API returns 200 with an empty content and the reasoning in
+                # a separate field. Silence here reads like a parse failure three
+                # layers up, so name it.
+                reasoning = len(message.get("reasoning_content") or "")
+                raise RuntimeError(
+                    "大模型返回空内容"
+                    + (f"（推理占了 {reasoning} 字，max_tokens 预算可能不够）" if reasoning else "")
+                    + f"，finish_reason={choice.get('finish_reason')}"
+                )
+            return content
         last_error = f"HTTP {res.status_code}: {res.text[:500]}"
         if res.status_code in {408, 409, 425, 429, 500, 502, 503, 504} and attempt < attempts - 1:
             await asyncio.sleep(2 * (attempt + 1))
@@ -3161,11 +3161,11 @@ async def revise_summary(recording_id: str, instruction: str, user: dict[str, An
 
 
 # ---------------------------------------------------------------------------
-# Optional LLM passes: topic chapters and hotword suggestions.
+# Optional LLM pass: mine a finished transcript for hotwords the recogniser
+# should have known, and for words it probably misheard.
 #
-# Both are gated on ai_enhance_enabled(). Off, or with no API key, the app falls
-# back to the local rule-based path (chapters) or simply does nothing
-# (suggestions) — the transcript itself never depends on these.
+# Gated on ai_enhance_enabled(). Off, or with no API key, it simply does not
+# run — the transcript itself never depends on it.
 # ---------------------------------------------------------------------------
 
 
@@ -3214,223 +3214,6 @@ def indexed_transcript_text(segments: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
-def rule_based_chapters(segments: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Local fallback chapterizer.
-
-    No semantics available, so it cuts on the two signals the transcript does
-    carry: long pauses and accumulated length. Titles are the opening clause of
-    the chapter, which is honest about being mechanical rather than pretending
-    to be a summary.
-    """
-    if not segments:
-        return []
-    gap_seconds = env_float("AHAMVOICE_CHAPTER_GAP_SECONDS", 12.0, 4.0, 60.0)
-    target_chars = env_int("AHAMVOICE_CHAPTER_TARGET_CHARS", 1200, 400, 4000)
-    chapters: list[dict[str, Any]] = []
-    current: list[dict[str, Any]] = []
-    chars = 0
-    previous_end = float(segments[0]["start_sec"])
-
-    def flush() -> None:
-        nonlocal current, chars
-        if not current:
-            return
-        head = bare_transcript_text(str(current[0]["text"]))[:24]
-        chapters.append(
-            {
-                "start_sec": float(current[0]["start_sec"]),
-                "end_sec": float(current[-1]["end_sec"]),
-                "start_label": current[0]["start_label"],
-                "title": head or "未命名段落",
-                "gist": "",
-                "source": "rule",
-            }
-        )
-        current = []
-        chars = 0
-
-    for row in segments:
-        gap = float(row["start_sec"]) - previous_end
-        if current and (gap >= gap_seconds or chars >= target_chars):
-            flush()
-        current.append(row)
-        chars += len(str(row["text"]))
-        previous_end = float(row["end_sec"])
-    flush()
-    return chapters
-
-
-async def call_llm_chapters(
-    rec: dict[str, Any], segments: list[dict[str, Any]], instruction: str = ""
-) -> list[dict[str, Any]]:
-    api_key, base, model = get_llm_config()
-    if not api_key:
-        raise RuntimeError("大模型 API Key 未配置")
-
-    # The model picks existing segment indices rather than inventing timestamps —
-    # it is far more reliable at "which line starts this topic" than at clock
-    # arithmetic, and an index maps back to an exact start_sec.
-    window = env_int("AHAMVOICE_CHAPTER_WINDOW_CHARS", 24000, 6000, 40000)
-    text = indexed_transcript_text(segments)
-    windows = [text[i : i + window] for i in range(0, len(text), window)] or [""]
-    collected: list[dict[str, Any]] = []
-    chat_url = f"{base}/chat/completions"
-    extra = f"\n额外要求：{instruction.strip()}" if instruction.strip() else ""
-
-    async with httpx.AsyncClient(timeout=180, trust_env=False) as client:
-        for index, chunk in enumerate(windows, 1):
-            payload = {
-                "model": model,
-                "temperature": 0.1,
-                "max_tokens": env_int("AHAMVOICE_CHAPTER_MAX_TOKENS", 2048, 512, 8192),
-                "messages": [
-                    {
-                        "role": "system",
-                        "content": (
-                            "你把会议转写按议题切分成章节。只依据给定文本，不编造内容。"
-                            "只输出 JSON，不要任何解释文字。"
-                        ),
-                    },
-                    {
-                        "role": "user",
-                        "content": (
-                            "下面是带行号的会议转写，每行格式为 `#序号 [时间] 说话人: 内容`。\n"
-                            "请按议题切分章节，输出 JSON 数组，每个元素：\n"
-                            '{"start_index": 整数（该章节起始行的序号）, "title": "8-18 字的议题标题", '
-                            '"gist": "一句话说明这一段谈了什么"}\n'
-                            "要求：\n"
-                            "1. start_index 必须是文中真实出现过的序号，必须递增。\n"
-                            "2. 按议题切，不要按固定长度切；一个议题讲很久就是一章。\n"
-                            "3. 标题用会议里的原话概念，不要写“讨论了一些问题”这种空话。\n"
-                            "4. 寒暄、闲聊可以并进相邻章节，不必单独成章。\n"
-                            f"5. 整段大约切 {max(2, len(chunk) // 1500)} 到 {max(4, len(chunk) // 700)} 章。"
-                            f"{extra}\n\n"
-                            f"录音标题：{rec.get('title')}\n"
-                            f"会议类型：{rec.get('meeting_type')}\n"
-                            f"分块：{index}/{len(windows)}\n\n{chunk}"
-                        ),
-                    },
-                ],
-            }
-            reply = await _deepseek_post_with_retry(client, chat_url, api_key, payload)
-            try:
-                parsed = parse_json_block(reply)
-            except ValueError:
-                continue
-            if isinstance(parsed, dict):
-                parsed = parsed.get("chapters") or []
-            if isinstance(parsed, list):
-                collected.extend(item for item in parsed if isinstance(item, dict))
-
-    by_index = {row["index"]: row for row in segments}
-    chapters: list[dict[str, Any]] = []
-    seen: set[int] = set()
-    for item in collected:
-        try:
-            start_index = int(item.get("start_index"))
-        except (TypeError, ValueError):
-            continue
-        if start_index not in by_index or start_index in seen:
-            continue
-        seen.add(start_index)
-        seg = by_index[start_index]
-        chapters.append(
-            {
-                "start_index": start_index,
-                "start_sec": float(seg["start_sec"]),
-                "start_label": seg["start_label"],
-                "title": str(item.get("title") or "").strip()[:40] or "未命名议题",
-                "gist": str(item.get("gist") or "").strip()[:200],
-                "source": "llm",
-            }
-        )
-    if not chapters:
-        raise RuntimeError("模型没有返回可用的章节")
-
-    chapters.sort(key=lambda row: row["start_index"])
-    last_end = float(segments[-1]["end_sec"])
-    for position, chapter in enumerate(chapters):
-        following = chapters[position + 1]["start_index"] if position + 1 < len(chapters) else None
-        chapter["end_sec"] = float(by_index[following]["start_sec"]) if following is not None else last_end
-        chapter.pop("start_index", None)
-    return chapters
-
-
-def store_chapters(conn: sqlite3.Connection, recording_id: str, chapters: list[dict[str, Any]]) -> int:
-    version = int(
-        conn.execute(
-            "select coalesce(max(version), 0) + 1 from transcript_chapters where recording_id = ?",
-            (recording_id,),
-        ).fetchone()[0]
-        or 1
-    )
-    timestamp = now()
-    for idx, chapter in enumerate(chapters):
-        conn.execute(
-            """
-            insert into transcript_chapters(
-                id,recording_id,version,idx,start_sec,end_sec,start_label,title,gist,source,created_at
-            ) values(?,?,?,?,?,?,?,?,?,?,?)
-            """,
-            (
-                str(uuid.uuid4()),
-                recording_id,
-                version,
-                idx,
-                float(chapter["start_sec"]),
-                float(chapter["end_sec"]),
-                chapter.get("start_label") or seconds_label(chapter["start_sec"]),
-                chapter["title"],
-                chapter.get("gist", ""),
-                chapter.get("source", "llm"),
-                timestamp,
-            ),
-        )
-    return version
-
-
-def latest_chapters(conn: sqlite3.Connection, recording_id: str) -> list[dict[str, Any]]:
-    row = conn.execute(
-        "select coalesce(max(version), 0) from transcript_chapters where recording_id = ?",
-        (recording_id,),
-    ).fetchone()
-    version = int(row[0] or 0)
-    if not version:
-        return []
-    return rowsdict(
-        conn.execute(
-            "select * from transcript_chapters where recording_id = ? and version = ? order by idx",
-            (recording_id, version),
-        ).fetchall()
-    )
-
-
-async def generate_chapters(recording_id: str, user: dict[str, Any], instruction: str = "") -> dict[str, Any]:
-    with db() as conn:
-        rec = can_access_recording(conn, recording_id, user)
-        segments = indexed_segments(conn, recording_id)
-    if not segments:
-        raise HTTPException(status_code=409, detail="录音还没有转写结果，无法分章")
-
-    source = "llm"
-    if ai_enhance_enabled() and get_llm_config()[0]:
-        try:
-            chapters = await call_llm_chapters(rec, segments, instruction)
-        except Exception as exc:
-            # A failed chapter pass must never cost the user their transcript.
-            chapters = rule_based_chapters(segments)
-            source = f"rule (LLM 失败：{type(exc).__name__})"
-    else:
-        chapters = rule_based_chapters(segments)
-        source = "rule"
-
-    with db() as conn:
-        version = store_chapters(conn, recording_id, chapters)
-        audit(conn, user, "recording.chapters", f"生成章节：{rec['title']}，{len(chapters)} 章（{source}）。")
-        rows = latest_chapters(conn, recording_id)
-    return {"recording_id": recording_id, "version": version, "source": source, "chapters": rows}
-
-
 async def call_llm_hotword_suggestions(
     rec: dict[str, Any], transcript: str, known: list[str]
 ) -> dict[str, list[dict[str, Any]]]:
@@ -3441,7 +3224,7 @@ async def call_llm_hotword_suggestions(
     payload = {
         "model": model,
         "temperature": 0.1,
-        "max_tokens": env_int("AHAMVOICE_SUGGEST_MAX_TOKENS", 2048, 512, 8192),
+        "max_tokens": env_int("AHAMVOICE_SUGGEST_MAX_TOKENS", 8192, 512, 16384),
         "messages": [
             {
                 "role": "system",
@@ -3993,29 +3776,28 @@ def run_emotion_job(recording_id: str, user: dict[str, Any]) -> None:
 
 
 def run_ai_enhancements(recording_id: str, user: dict[str, Any]) -> None:
-    """Chapters + hotword suggestions, best effort.
+    """Mine the finished transcript for hotword suggestions. Best effort.
 
     Deliberately swallows failures: these are extras layered on a transcript the
     user already has, and a flaky model call must not mark the recording failed.
     """
     if not ai_enhance_enabled():
         return
-    for label, coro in (
-        ("章节", lambda: generate_chapters(recording_id, user)),
-        ("热词建议", lambda: generate_hotword_suggestions(recording_id, user)),
-    ):
-        try:
-            asyncio.run(coro())
-        except Exception as exc:
-            with db() as conn:
-                audit(conn, user, "recording.enhance", f"{label}生成失败：{type(exc).__name__}: {exc}")
+    try:
+        asyncio.run(generate_hotword_suggestions(recording_id, user))
+    except Exception as exc:
+        with db() as conn:
+            audit(conn, user, "recording.enhance", f"热词建议生成失败：{exc}")
 
 
 def process_recording_background(recording_id: str, user: dict[str, Any]) -> None:
     try:
         transcribe_recording(recording_id, user)
-        asyncio.run(summarize_recording(recording_id, user))
+        # Suggestions read the transcript, not the summary, so they run first: a
+        # missing API key or a flaky summary call used to take them down with it
+        # even though they never needed it.
         run_ai_enhancements(recording_id, user)
+        asyncio.run(summarize_recording(recording_id, user))
     except HTTPException:
         return
     except Exception as exc:
@@ -4723,7 +4505,6 @@ def recording_detail(recording_id: str, user: dict[str, Any] = Depends(current_u
             "tasks": tasks,
             "outputs": outputs,
             "hotword_package": hotword_package,
-            "chapters": latest_chapters(conn, recording_id),
         }
 
 
@@ -4758,8 +4539,16 @@ def recording_audio(recording_id: str, user: dict[str, Any] = Depends(current_us
 
 
 @app.post("/api/recordings/{recording_id}/transcribe")
-def transcribe_api(recording_id: str, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
-    return transcribe_recording(recording_id, user)
+def transcribe_api(
+    recording_id: str,
+    background_tasks: BackgroundTasks,
+    user: dict[str, Any] = Depends(current_user),
+) -> dict[str, Any]:
+    result = transcribe_recording(recording_id, user)
+    # A new transcript deserves a fresh look for terms it got wrong. Queued
+    # rather than inline so the caller is not held for another model round-trip.
+    background_tasks.add_task(run_ai_enhancements, recording_id, dict(user))
+    return result
 
 
 @app.post("/api/recordings/{recording_id}/summarize")
@@ -5850,29 +5639,6 @@ def delete_voiceprint(profile_id: str, user: dict[str, Any] = Depends(current_us
         except OSError:
             pass
     return {"ok": True, "id": profile_id}
-
-
-@app.get("/api/recordings/{recording_id}/chapters")
-def get_chapters(recording_id: str, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
-    with db() as conn:
-        can_access_recording(conn, recording_id, user)
-        rows = latest_chapters(conn, recording_id)
-    return {"recording_id": recording_id, "chapters": rows}
-
-
-@app.post("/api/recordings/{recording_id}/chapters")
-async def regenerate_chapters(
-    recording_id: str,
-    payload: dict[str, Any] | None = Body(default=None),
-    user: dict[str, Any] = Depends(current_user),
-) -> dict[str, Any]:
-    """(Re)cut the transcript into topic chapters.
-
-    `instruction` is free text passed to the model — "按客户分章"、"更细一点"。
-    Each run stores a new version rather than overwriting the previous cut.
-    """
-    instruction = str((payload or {}).get("instruction") or "")
-    return await generate_chapters(recording_id, user, instruction)
 
 
 @app.get("/api/hotword-suggestions")

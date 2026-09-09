@@ -289,22 +289,6 @@ export interface EmotionAnalysis {
   is_current: number;
 }
 
-// One topic chapter cut out of the transcript. `source` is "llm" when a model
-// did the cutting and "rule" when it fell back to pauses + length locally.
-export interface Chapter {
-  id: string;
-  recording_id: string;
-  version: number;
-  idx: number;
-  start_sec: number;
-  end_sec: number;
-  start_label: string;
-  title: string;
-  gist: string;
-  source: string;
-  created_at: string;
-}
-
 // A pending proposal for the hotword table. kind="term" is a new word;
 // kind="correction" means `heard` should have been `suggested`, and accepting it
 // files `heard` as an alias so the next transcript gets it right.
@@ -325,7 +309,6 @@ export interface HotwordSuggestion {
 export interface RecordingDetail {
   recording: Recording;
   segments: TranscriptSegment[];
-  chapters: Chapter[];
   summary: Summary | null;
   summaries: Summary[];
   emotion_analysis: EmotionAnalysis | null;
