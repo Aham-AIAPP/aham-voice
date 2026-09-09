@@ -2685,11 +2685,10 @@ def transcribe_recording(recording_id: str, user: dict[str, Any], segment_second
         rec = can_access_recording(conn, recording_id, user)
         task_id = create_task(conn, recording_id, rec["title"], "VAD+说话人分离转写")
         conn.execute("update recordings set asr_status = ?, updated_at = ? where id = ?", ("running", now(), recording_id))
-        conn.execute("delete from transcript_segments where recording_id = ?", (recording_id,))
-        conn.execute("delete from summaries where recording_id = ?", (recording_id,))
-        conn.execute("delete from emotion_analyses where recording_id = ?", (recording_id,))
-        conn.execute("update recordings set summary_status = ? where id = ?", ("pending", recording_id))
         conn.commit()
+        # 旧稿子留到新稿子出来为止。此前是一开始就删，于是任何一次失败——模型没
+        # 加载上、进程被杀、依赖出问题——都会把用户已有的转写一起带走，而重跑
+        # 一次要几十分钟。删除已挪到成功写入的同一个事务里。
 
     try:
         model = get_asr_model()
@@ -2758,6 +2757,12 @@ def transcribe_recording(recording_id: str, user: dict[str, Any], segment_second
                 logging.getLogger("ahamvoice").warning("phonetic correction skipped: %s", exc)
         with db() as conn:
             update_task(conn, task_id, "running", 90)
+            # 到这里 ASR 已经成功，才动旧数据：删除与写入在同一个事务里，中途
+            # 出错会整体回滚，不会留下半份稿子。
+            conn.execute("delete from transcript_segments where recording_id = ?", (recording_id,))
+            conn.execute("delete from summaries where recording_id = ?", (recording_id,))
+            conn.execute("delete from emotion_analyses where recording_id = ?", (recording_id,))
+            conn.execute("update recordings set summary_status = ? where id = ?", ("pending", recording_id))
             inserted = 0
             for item in merged_segments:
                 conn.execute(
