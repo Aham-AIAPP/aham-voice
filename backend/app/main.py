@@ -2494,47 +2494,6 @@ def repair_speaker_fragments(items: list[dict[str, Any]]) -> tuple[list[dict[str
     return items, repaired
 
 
-def phonetic_entries(conn: sqlite3.Connection) -> list[dict[str, Any]]:
-    """启用中的热词，连同它们的口语形式，喂给音素纠错。
-
-    `spoken` 是用户（或 MCP 客户端）填的读法：MOM 读作「毛姆」，AGV 读作
-    「agv」。没填就退回用词本身——中文专名本来就是按字面读的。
-    """
-    rows = rowsdict(
-        conn.execute(
-            "select word, aliases, spoken from hotwords where active = 1 and coalesce(state,'active') in ('active','protected')"
-        ).fetchall()
-    )
-    entries: list[dict[str, Any]] = []
-    for row in rows:
-        word = str(row.get("word") or "").strip()
-        if len(word) < 2:
-            continue
-        # 只用显式填写的读法，不用别名。别名是描述性的（「制造运营管理」），拿它
-        # 做模糊匹配会把「制造运营阶段」也改掉；别名归精确替换那层管。
-        spoken = [item.strip() for item in str(row.get("spoken") or "").split(",") if item.strip()]
-        entries.append({"display": word, "spoken": spoken or [word]})
-    return entries
-
-
-def apply_phonetic_corrections(conn: sqlite3.Connection, text: str) -> tuple[str, list[dict[str, Any]]]:
-    """Fix proper nouns the recogniser got phonetically close but wrong."""
-    if not env_bool("AHAMVOICE_PHONETIC_CORRECTION", False):
-        return text, []
-    entries = phonetic_entries(conn)
-    if not entries:
-        return text, []
-    try:
-        from . import phonetic
-
-        threshold = env_float("AHAMVOICE_PHONETIC_THRESHOLD", 0.65, 0.5, 0.95)
-        return phonetic.correct(text, entries, threshold=threshold)
-    except Exception as exc:
-        # 纠错失败绝不能让用户丢掉稿子。
-        logging.getLogger("ahamvoice").warning("phonetic correction skipped: %s", exc)
-        return text, []
-
-
 def sentence_info_to_transcript_segments(
     sentence_info: list[dict[str, Any]],
     hotwords: dict[str, str],
@@ -2736,25 +2695,6 @@ def transcribe_recording(recording_id: str, user: dict[str, Any], segment_second
             update_task(conn, task_id, "running", 82)
         speaker_matches = match_speaker_profiles(rec, sentence_info)
         merged_segments = sentence_info_to_transcript_segments(sentence_info, hotwords, speaker_matches)
-        # 音素纠错：把听成近音的专名改回来。放在合并之后、入库之前，存进去的就是
-        # 已纠正的稿子，下游（纪要、导出、MCP）不必各自再来一遍。
-        corrections: list[dict[str, Any]] = []
-        with db() as conn:
-            entries = phonetic_entries(conn)
-        # 默认关闭：音素匹配没有语义，「由你们」和「优尼昂」读音几乎相同，靠规则
-        # 分不开。在换用带 LLM 解码器的识别模型这条路验完之前，不默认改用户的稿子。
-        if entries and env_bool("AHAMVOICE_PHONETIC_CORRECTION", False):
-            try:
-                from . import phonetic
-
-                threshold = env_float("AHAMVOICE_PHONETIC_THRESHOLD", 0.65, 0.5, 0.95)
-                for item in merged_segments:
-                    fixed, hits_ph = phonetic.correct(str(item["text"]), entries, threshold=threshold)
-                    if hits_ph:
-                        item["text"] = fixed
-                        corrections.extend(hits_ph)
-            except Exception as exc:
-                logging.getLogger("ahamvoice").warning("phonetic correction skipped: %s", exc)
         with db() as conn:
             update_task(conn, task_id, "running", 90)
             # 到这里 ASR 已经成功，才动旧数据：删除与写入在同一个事务里，中途
@@ -2801,15 +2741,7 @@ def transcribe_recording(recording_id: str, user: dict[str, Any], segment_second
                 f"完成录音转写和说话人分离：{rec['title']}，生成 {inserted} 个语义发言段，"
                 f"检测到 {spk_count} 个说话人，使用热词 {package['asr_terms_count']} 条"
                 f"（会前上下文 {package.get('context_terms_count', 0)} 条），"
-                f"命中热词 {hits['global_words']} 个"
-                + (
-                    "，音素纠错 "
-                    + "、".join(f"{c['from']}→{c['to']}" for c in corrections[:8])
-                    + (f" 等共 {len(corrections)} 处" if len(corrections) > 8 else f"，共 {len(corrections)} 处")
-                    if corrections
-                    else ""
-                )
-                + "。",
+                f"命中热词 {hits['global_words']} 个。",
             )
         return {"recording_id": recording_id, "segments": inserted, "speakers": spk_count}
     except Exception as exc:
@@ -3018,10 +2950,44 @@ async def _deepseek_post_with_retry(
     raise RuntimeError(f"大模型请求失败: {last_error}")
 
 
+def summary_term_hint(rec: dict[str, Any]) -> str:
+    """告诉纪要模型这场会有哪些专名，以及转写可能把它们听错。
+
+    这是整条链路上性价比最高的一处。实测同一段稿子：不给列表时纪要照抄了错的
+    「ADV」，给了之后自动写成「AGV」。而「冒陌」「WWS」这类两种情况下都能从
+    上下文推对——所以真正需要提示的，是那些本身也像合法专名的错法。
+
+    比起先去修稿子，这里只多几十个 token，且不改用户的转写。
+    """
+    with db() as conn:
+        terms = [
+            str(row["word"])
+            for row in conn.execute(
+                "select word from hotwords where active = 1 and coalesce(state,'active') in ('active','protected')"
+                " order by length(word) desc limit 150"
+            ).fetchall()
+        ]
+        terms += [
+            str(row["term"])
+            for row in conn.execute(
+                "select term from recording_hotwords where recording_id = ?", (rec["id"],)
+            ).fetchall()
+        ]
+    unique = list(dict.fromkeys(term for term in terms if term.strip()))
+    if not unique:
+        return ""
+    return (
+        "\n本次会议涉及的专有名词：" + "、".join(unique[:150]) + "。\n"
+        "转写可能把它们听错（英文缩写尤其容易，例如 AGV 被听成 ADV、MOM 被听成「冒目」），"
+        "你在纪要里必须写正确的专名，不要照抄稿子里的错写法。\n"
+    )
+
+
 async def call_deepseek_summary(text: str, rec: dict[str, Any]) -> tuple[str, str]:
     api_key, base, model = get_llm_config()
     if not api_key:
         raise RuntimeError("大模型 API Key 未配置")
+    term_hint = summary_term_hint(rec)
 
     chunk_chars = env_int("AHAMVOICE_SUMMARY_CHUNK_CHARS", 18000, 8000, 28000)
     chunks = [text[i : i + chunk_chars] for i in range(0, len(text), chunk_chars)] or [""]
@@ -3063,7 +3029,7 @@ async def call_deepseek_summary(text: str, rec: dict[str, Any]) -> tuple[str, st
                             f"录音标题：{rec['title']}\n"
                             f"会议类型：{rec['meeting_type']}\n"
                             f"分块：{index}/{len(chunks)}\n\n"
-                            f"{focus}\n\n"
+                            f"{focus}\n{term_hint}\n"
                             f"{chunk}"
                         ),
                     },
@@ -3095,7 +3061,7 @@ async def call_deepseek_summary(text: str, rec: dict[str, Any]) -> tuple[str, st
                         f"会议类型：{rec['meeting_type']}\n"
                         f"录音时长：{rec['duration_label']}\n\n"
                         f"深度要求：{depth}\n"
-                        f"类型侧重点：{focus}\n\n"
+                        f"类型侧重点：{focus}\n{term_hint}\n"
                         "写作要求：\n"
                         "- 先给整体判断，再按议题展开细节；不要把所有内容压成三五条。\n"
                         "- 每个重点议题尽量包含：背景/上下文、讨论细节、相关人或客户态度、明确结论、待确认问题、时间戳证据。\n"
@@ -3116,6 +3082,7 @@ async def call_deepseek_revision(instruction: str, base_summary: str, transcript
     api_key, base, model = get_llm_config()
     if not api_key:
         raise RuntimeError("大模型 API Key 未配置")
+    term_hint = summary_term_hint(rec)
 
     if len(transcript) <= 26000:
         transcript_context = transcript
@@ -3148,7 +3115,7 @@ async def call_deepseek_revision(instruction: str, base_summary: str, transcript
                     f"会议类型：{rec['meeting_type']}\n"
                     f"录音时长：{rec['duration_label']}\n\n"
                     f"深度要求：{depth}\n"
-                    f"类型侧重点：{focus}\n\n"
+                    f"类型侧重点：{focus}\n{term_hint}\n"
                     f"目标结构（除非用户明确要求改结构，否则按此组织小节）：\n{meeting_template(rec.get('meeting_type') or '')}\n\n"
                     f"用户修改要求：\n{instruction}\n\n"
                     f"当前纪要：\n{base_summary}\n\n"
@@ -4049,16 +4016,15 @@ def run_ai_enhancements(recording_id: str, user: dict[str, Any]) -> None:
     """
     if not ai_enhance_enabled():
         return
-    # 纠错排在建议之前：建议是从稿子里挖词，让它看到已纠正的版本。
-    for label, coro in (
-        ("转写纠错", lambda: correct_transcript_with_llm(recording_id, user)),
-        ("热词建议", lambda: generate_hotword_suggestions(recording_id, user)),
-    ):
-        try:
-            asyncio.run(coro())
-        except Exception as exc:
-            with db() as conn:
-                audit(conn, user, "recording.enhance", f"{label}失败：{exc}")
+    # 校对稿子不在这里自动跑：纪要提示词已经带上专名列表，实测能让纪要写对
+    # 专名而不必先改稿子；而校对一份 42 分钟的稿子要十几分钟和五次调用。
+    # 需要一份干净的逐字稿时（对外发、要检索），用 POST /recordings/{id}/correct
+    # 或 MCP 的 correct_transcript 按需触发。
+    try:
+        asyncio.run(generate_hotword_suggestions(recording_id, user))
+    except Exception as exc:
+        with db() as conn:
+            audit(conn, user, "recording.enhance", f"热词建议失败：{exc}")
 
 
 def process_recording_background(recording_id: str, user: dict[str, Any]) -> None:

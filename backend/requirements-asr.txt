@@ -109,4 +109,3 @@ uvicorn==0.48.0
 wheel==0.47.0
 xxhash==3.7.0
 yarl==1.24.2
-pypinyin==0.55.0
