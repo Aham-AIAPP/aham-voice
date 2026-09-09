@@ -164,7 +164,7 @@ async def set_recording_context(
     说出口的专有名词提炼成 terms 传进来。这批词在本次转写里优先级最高，必定
     进入 ASR 热词表，转写完还会统计真实命中次数。
 
-    terms 每项是 {"term": "兰之天", "aliases": ["兰知天", "蓝之天"], "note": "客户"}：
+    terms 每项是 {"term": "明远科技", "aliases": ["明远", "明园科技"], "note": "客户"}：
       - term  = 正确写法，会喂给 ASR 做偏置
       - aliases = 你预判可能被听错的写法，只用于转写后替换，约束比 term 松
     term 有硬约束（ASR 偏置对不满足的词无效）：2–8 个字、不含空格、不是纯数字或

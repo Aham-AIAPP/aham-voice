@@ -920,7 +920,7 @@ def ensure_schema() -> None:
                 ("AhamVoice", "产品", "aham voice,aham", "系统内置", "部门共享", 10, 1),
                 ("ERP", "行业", "企业资源计划", "产品库", "部门共享", 8, 1),
                 ("MES", "行业", "制造执行系统", "产品库", "部门共享", 8, 1),
-                ("金蝶接口", "项目", "金蝶 API,金蝶系统", "系统内置", "团队共享", 9, 1),
+                ("ERP 接口", "项目", "ERP API,ERP 系统", "系统内置", "团队共享", 9, 1),
                 ("客户成功", "组织", "CS,售后成功", "通讯录", "部门共享", 6, 1),
             ]
             conn.executemany(
@@ -1494,7 +1494,7 @@ def hotword_limits() -> dict[str, int]:
 def recording_context_terms(conn: sqlite3.Connection, recording_id: str) -> list[dict[str, Any]]:
     """Per-recording hotwords supplied ahead of transcription (the MCP briefing).
 
-    These are临场 terms — "this meeting is with 兰之天 about MES" — so they always
+    These are临场 terms — "this meeting is with <customer> about MES" — so they always
     win a slot in the ASR package regardless of the global ranking, and they die
     with the recording instead of polluting the global list.
     """
@@ -3248,10 +3248,11 @@ async def call_llm_transcript_corrections(
     being a record of what was said. Constrained this way it cannot: measured on
     a real 42-minute meeting, all 26 proposals quoted text that existed verbatim.
 
-    Why this rather than phonetic distance: 「由你们」 and 「优尼昂」 are near
-    homophones, and only context tells them apart. The phonetic pass got that one
-    wrong; this pass did not, and additionally caught EIPIP→ERP and 进洁→金蝶,
-    which no phonetic rule reaches.
+    Why this rather than phonetic distance: a company name and an ordinary phrase
+    can be near homophones, and only context tells them apart. A phonetic pass
+    rewrote one such phrase into a company name; this pass did not, and it also
+    caught cases no phonetic rule reaches — a badly mangled acronym, or a term
+    written correctly elsewhere in the same meeting.
     """
     api_key, base, model = get_llm_config()
     if not api_key:
@@ -3400,7 +3401,7 @@ async def call_llm_hotword_suggestions(
                     "任务二：找出疑似被识别错的专名——上下文明显不通、或同一个概念在文中出现多种写法。\n\n"
                     "输出 JSON：\n"
                     '{"terms":[{"word":"安灯","reason":"多次出现的车间术语","confidence":0.9}],\n'
-                    ' "corrections":[{"heard":"兰芝天","suggested":"兰之天","reason":"同一家公司在文中另有正确写法"}]}\n\n'
+                    ' "corrections":[{"heard":"明远科枝","suggested":"明远科技","reason":"同一家公司在文中另有正确写法"}]}\n\n'
                     "硬性约束（不满足的不要输出）：\n"
                     "1. word / suggested 长度 2-8 个字符，不含空格。\n"
                     "2. 不要输出含“公司/集团/股份/有限/责任”的书面全称，口语里没人这么说。\n"
@@ -4576,8 +4577,8 @@ def put_recording_context(
 ) -> dict[str, Any]:
     """Attach or update a recording's background and proper nouns.
 
-    The background is free text the user dictated to an assistant ("这次去优尼昂
-    现场，客户方喻总和包主任，聊 ERP 和 MOM 是否同步建设"). It reaches the summary
+    The background is free text the user dictated to an assistant ("这次去客户
+    现场，对方王总和李主任在场，聊 ERP 和 MOM 是否同步建设"). It reaches the summary
     prompt verbatim — it says who is who and what the meeting is for, which is
     the context a transcript alone never carries, and it is more trustworthy
     than the transcript because the user wrote it.

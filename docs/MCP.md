@@ -65,11 +65,11 @@ uv run --with mcp --with httpx python /绝对路径/aham-voice/mcp-server/aham_v
 会前上下文是这套集成的重点。全局热词是静态的，而每场会的专名是临场的——你在对话里把背景说清楚，模型把里面的专名提炼出来，这批词在本次转写里优先级最高。
 
 ```
-我：把 ~/Desktop/0908.m4a 导进来。这次是跟兰之天谈 MES 二期，
-    客户方张伟和李娜，会聊到安灯、排产、Orchisky 平台。
+我：把 ~/Desktop/0908.m4a 导进来。这次是跟明远科技谈 MES 二期，
+    客户方张伟和李娜，会聊到安灯、排产、某平台。
 
 Claude：[import_recording]        → 导入，先不处理
-        [set_recording_context]   → briefing + terms: 兰之天/安灯/排产/Orchisky
+        [set_recording_context]   → briefing + terms: 明远科技/安灯/排产/某平台
         [start_processing]        → 开始转写
         [get_recording]           → 轮询进度
         [get_transcript]          → 出稿
@@ -77,7 +77,7 @@ Claude：[import_recording]        → 导入，先不处理
 
 顺序要紧：`import_recording` 默认 `start_now=false`，先留出写上下文的窗口，否则上传即转写，热词来不及生效。已经转写过的录音，改完上下文要再调一次 `start_processing`。
 
-术语有硬约束（ASR 偏置对不满足的词无效）：2–8 个字、不含空格、不是纯数字或编号、不带「公司/集团/股份/有限/责任」这类书面组织词。被拒的词会带原因返回，模型可以改写后重提——例如「江苏兰之天软件技术有限公司」要换成「兰之天」。
+术语有硬约束（ASR 偏置对不满足的词无效）：2–8 个字、不含空格、不是纯数字或编号、不带「公司/集团/股份/有限/责任」这类书面组织词。被拒的词会带原因返回，模型可以改写后重提——例如「某某科技股份有限公司」要换成「明远科技」。
 
 转写完 `get_recording_context` 会给出每个术语的真实命中次数：命中多的值得用 `add_hotwords` 提升为常驻热词，命中 0 的随录音留着，不污染主库。
 

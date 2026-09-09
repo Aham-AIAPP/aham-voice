@@ -168,7 +168,7 @@ export function RecordingNew() {
             rows={4}
             value={briefing}
             onChange={(e) => setBriefing(e.target.value)}
-            placeholder="例如：到苏州优尼昂现场交流项目推动。我方是金蝶实施服务商，客户方喻总和 IT 负责人包主任在场。围绕 ERP 与 MOM 是否同步建设、老 MES 架构老化展开。"
+            placeholder="例如：到客户现场交流项目推动情况。我方是实施服务商，对方王总和 IT 负责人李主任在场。围绕 ERP 与 MOM 是否同步建设、老系统架构老化展开。"
           />
         </FormRow>
 
