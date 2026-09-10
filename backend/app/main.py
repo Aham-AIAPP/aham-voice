@@ -2816,27 +2816,34 @@ async def _deepseek_post_with_retry(
             choice = (data.get("choices") or [{}])[0]
             message = choice.get("message") or {}
             content = message.get("content") or ""
+            # 撞上长度上限有两种表现，此前只处理了第一种：
+            #   · 内容为空——推理模型把预算全烧在思考上，接口 200 但 content 空
+            #   · 内容写到一半——看起来成功，实际是断的。一份「李总回应"」结尾的
+            #     纪要比整段失败更糟，因为它不声不响地入了库
+            # 所以判断只看 finish_reason，不看内容是否为空。
+            reasoning = len(message.get("reasoning_content") or "")
+            truncated = choice.get("finish_reason") == "length"
+            budget = int(payload.get("max_tokens") or 0)
+            if truncated and budget and budget < 32768 and attempt < attempts - 1:
+                payload = {**payload, "max_tokens": min(32768, budget * 2)}
+                last_error = (
+                    f"输出被 max_tokens={budget} 截断"
+                    + (f"（推理占了 {reasoning} 字）" if reasoning else "")
+                    + f"；提到 {payload['max_tokens']} 后重试"
+                )
+                continue
             if not content.strip():
-                # Reasoning models bill their thinking against the same
-                # max_tokens budget; when a long prompt makes them think past it,
-                # the API returns 200 with an empty content and the reasoning in
-                # a separate field. Raising the ceiling is the only fix, so do it
-                # here rather than making every caller guess a budget that works
-                # for both reasoning and non-reasoning models.
-                reasoning = len(message.get("reasoning_content") or "")
-                truncated = choice.get("finish_reason") == "length"
-                budget = int(payload.get("max_tokens") or 0)
-                if truncated and budget and budget < 32768 and attempt < attempts - 1:
-                    payload = {**payload, "max_tokens": min(32768, budget * 2)}
-                    last_error = (
-                        f"空内容，推理占了 {reasoning} 字；把 max_tokens 从 {budget} "
-                        f"提到 {payload['max_tokens']} 后重试"
-                    )
-                    continue
                 raise RuntimeError(
                     "大模型返回空内容"
                     + (f"（推理占了 {reasoning} 字，max_tokens 预算不够）" if reasoning else "")
                     + f"，finish_reason={choice.get('finish_reason')}"
+                )
+            if truncated:
+                # 重试用尽仍然截断。丢掉几千字不如交出去并说清楚——但必须让用户
+                # 看得见，否则他会把半截当全文。
+                content += (
+                    f"\n\n> ⚠️ 本次输出在 max_tokens={budget} 处被模型截断，以上内容不完整。"
+                    f"提高 AHAMVOICE_SUMMARY_FINAL_MAX_TOKENS 后重新生成可得到完整版本。\n"
                 )
             return content
         last_error = f"HTTP {res.status_code}: {res.text[:500]}"
@@ -3003,9 +3010,11 @@ async def call_deepseek_summary(text: str, rec: dict[str, Any]) -> tuple[str, st
                         f"{acoustic_hint}"
                         "写作要求：\n"
                         "- 先给整体判断，再按议题展开细节；不要把所有内容压成三五条。\n"
-                        "- 每个重点议题尽量包含：背景/上下文、讨论细节、相关人或客户态度、明确结论、待确认问题、时间戳证据。\n"
+                        "- 每个重点议题尽量包含：背景/上下文、讨论细节、相关人或客户态度、明确结论、待确认问题。\n"
                         "- 对长会议，要按客户/项目/模块/流程分组，合并重复表达，但保留具体名称和关键数字。\n"
-                        "- 关键原文证据要分散覆盖主要议题，不要只引用开头几分钟。\n"
+                        "- 时间戳要克制：只在最关键的结论或争议点后面附一个，全篇不超过 10 处，"
+                        "且分散覆盖主要议题、不要集中在开头几分钟。绝大多数句子不该带时间戳——"
+                        "读的人要的是判断，不是逐条索引。\n"
                         "- 不要出现“行动项”“待办”“下一步”“跟进事项”等表述。\n\n"
                         "请严格按以下结构输出（小节标题和顺序保持不变；某节无内容就写“未明确”，不要删节也不要新增顶级小节）：\n"
                         + "\n\n"
@@ -3479,12 +3488,10 @@ def generate_emotion_analysis(
 ) -> dict[str, Any]:
     """Acoustic emotion per segment, plus an optional written analysis.
 
-    `with_narrative=False` skips the model-written narrative and keeps only the
-    acoustic table. That is what the pipeline uses: the summary wants the raw
-    per-speaker numbers and the strongly negative moments as evidence, and
-    paying for a second model pass to turn them into prose it would then have to
-    read back is a detour. The narrative is generated when someone actually
-    opens the emotion view.
+    `with_narrative=False` keeps only the acoustic table. Nothing calls it that
+    way today: the narrative is what the emotion view is for, and skipping it
+    left that page showing a bare table forever. It stays as an option for a
+    caller that genuinely only needs the numbers.
     """
     with db() as conn:
         rec = can_access_recording(conn, recording_id, user)
@@ -3558,8 +3565,11 @@ def process_recording_background(recording_id: str, user: dict[str, Any]) -> Non
         transcribe_recording(recording_id, user)
         # 情绪排在纪要之前：纪要要拿它的声学数据。失败不该拖垮纪要——纪要是主
         # 输出，而情绪只是给它加一层判断依据。
+        #
+        # 这里生成完整的情绪分析（含解读）。纪要取用的是其中的声学表，不是解读
+        # ——那段解读是情绪页面自己的内容，不是给纪要绕一道的中间产物。
         try:
-            generate_emotion_analysis(recording_id, user, with_narrative=False)
+            generate_emotion_analysis(recording_id, user)
         except Exception as exc:
             with db() as conn:
                 audit(conn, user, "emotion", f"情绪分析失败，纪要将不带声学依据：{exc}")
