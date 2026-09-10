@@ -56,15 +56,15 @@ Aham Voice 为此而做：把整条链路在一台 Mac 上接完整——转写�
 
 ## 开始使用
 
-到 [Releases](https://github.com/Aham-AIAPP/aham-voice/releases/latest) 下载（仅 Apple Silicon）。默认给**精简版**：不含模型，单个 DMG，首次打开在「设置 → 本地模型」一键下载（约 2.1 GB，可中断续传）。
+仅 Apple Silicon。**安装包只在大版本发布**，中间的迭代只推代码——想用最新功能请从源码构建，见 [DEPLOY.md](DEPLOY.md)。
 
-想装完就能离线用、不下任何东西，选**完整版**：模型全部内置，体积大，按 GitHub 单文件上限分卷上传，下载全部分卷后在同一目录合并：
+现成的安装包是 [v2.0.0](https://github.com/Aham-AIAPP/aham-voice/releases/tag/v2.0.0)，模型内置、体积大，按 GitHub 单文件上限分卷上传，下载全部分卷后在同一目录合并：
 
 ```bash
 cat AhamVoice-*.dmg.* > "Aham Voice.dmg"
 ```
 
-两者都是：拖 Aham Voice 到「应用程序」→ 首次运行 `xattr -dr com.apple.quarantine "/Applications/Aham Voice.app"` 解除隔离 → 在「设置」填 OpenAI 兼容 API Key 即可。从源码构建 / 打包流程见 [DEPLOY.md](DEPLOY.md)。
+拖 Aham Voice 到「应用程序」→ 首次运行 `xattr -dr com.apple.quarantine "/Applications/Aham Voice.app"` 解除隔离 → 在「设置」填 OpenAI 兼容 API Key 即可。从源码构建 / 打包流程见 [DEPLOY.md](DEPLOY.md)。
 
 ---
 
