@@ -164,6 +164,10 @@ function SpeakerTile({
   }
 
   function commit() {
+    // 回车提交后 onSuccess 会卸载输入框，卸载又触发 onBlur —— 两条路径都调
+    // commit，于是同一个名字提交两次，建出两个同名声纹。而「名字没变就跳过」
+    // 那道判断此时还拦不住：候选数据要等查询刷新回来才更新。
+    if (nameMut.isPending) return;
     const name = draft.trim();
     if (!name) {
       // Empty → just cancel the edit, leave the speaker untouched.

@@ -5052,6 +5052,25 @@ def create_voiceprint_from_recording(payload: dict[str, Any], user: dict[str, An
             if not name:
                 raise HTTPException(status_code=400, detail="name is required")
             requested_scope, profile_team_id = resolve_voiceprint_scope(user, str(payload.get("scope") or ""), str(payload.get("team_id") or ""))
+            # 同名即同一个人：并入已有档案，而不是再建一个。声纹库的意义就是
+            # 一人一档；重复提交（客户端重发、用户再点一次）不该产生孪生档案，
+            # 匹配时它们还会互相抢同一个名字。
+            duplicate = rowdict(
+                conn.execute(
+                    "select * from speaker_profiles where name = ? and active = 1"
+                    " and coalesce(scope, 'personal') = ? order by created_at limit 1",
+                    (name, requested_scope),
+                ).fetchone()
+            )
+            if duplicate:
+                existing_profile = normalize_profile(duplicate)
+                # 必须一并指向它的 id：下游用 profile_id 决定更新哪一行，只设
+                # existing_profile 会让它去更新一个新生成的 uuid，等于什么都没更新。
+                profile_id = existing_profile["id"]
+                profile_team_id = existing_profile.get("team_id")
+                threshold = clamp_voiceprint_threshold(existing_profile.get("threshold") or threshold)
+                if note is None:
+                    note = existing_profile.get("note")
         all_rows = rowsdict(
             conn.execute(
                 "select * from transcript_segments where recording_id = ? and speaker = ? order by start_sec",
