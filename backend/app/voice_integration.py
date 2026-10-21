@@ -419,12 +419,85 @@ def retry_job(job_id,user):
     return {'job_id':job_id,'status':'queued'}
 
 
+def update_hotwords(args,user):
+    """Atomic, owner-scoped upserts; never use the UI's replace-all endpoint."""
+    m=core();entries=args.get('entries')
+    if not isinstance(entries,list) or not 1<=len(entries)<=100:
+        raise HTTPException(400,'每次提交 1–100 条热词')
+    cleaned=[];seen=set()
+    for entry in entries:
+        if not isinstance(entry,dict) or set(entry)-{'word','aliases','kind','weight','active'}:
+            raise HTTPException(400,'热词字段无效')
+        word=entry.get('word')
+        if not isinstance(word,str) or not 1<=len(word.strip())<=64 or not m.HOTWORD_WORD_PATTERN.fullmatch(word.strip()):
+            raise HTTPException(400,'标准词需为 1–64 字的中文、字母或数字')
+        word=word.strip();key=word.lower()
+        if key in seen:raise HTTPException(400,'同一批次不能重复提交同一标准词')
+        seen.add(key);item={'word':word}
+        if 'aliases' in entry:
+            aliases=entry['aliases']
+            if not isinstance(aliases,list) or len(aliases)>10 or any(not isinstance(a,str) or not 1<=len(a.strip())<=64 or not m.HOTWORD_WORD_PATTERN.fullmatch(a.strip()) for a in aliases):
+                raise HTTPException(400,'别名最多 10 个，每个为 1–64 字的中文、字母或数字')
+            item['aliases']=','.join(dict.fromkeys(a.strip() for a in aliases))
+        if 'kind' in entry:
+            kind=entry['kind']
+            if not isinstance(kind,str) or not 1<=len(kind.strip())<=30:raise HTTPException(400,'分类长度应为 1–30 字')
+            item['kind']=kind.strip()
+        if 'weight' in entry:
+            if type(entry['weight']) is not int or not 1<=entry['weight']<=10:raise HTTPException(400,'权重应为 1–10 的整数')
+            item['weight']=entry['weight']
+        if 'active' in entry:
+            if type(entry['active']) is not bool:raise HTTPException(400,'启用状态必须是布尔值')
+            item['active']=int(entry['active'])
+        cleaned.append(item)
+    result=[];changes=[];counts={'created':0,'updated':0,'unchanged':0};ts=m.now()
+    with m.db() as c:
+        c.execute('BEGIN IMMEDIATE')
+        for item in cleaned:
+            rows=c.execute("select * from hotwords where source='manual' and owner_id=? and lower(word)=lower(?)",(user['id'],item['word'])).fetchall()
+            if len(rows)>1:raise HTTPException(409,'个人词库有同名重复项，请先在本地整理后再更新')
+            old=dict(rows[0]) if rows else None
+            if old and old.get('scope')!='personal':raise HTTPException(409,'该词不是个人词，请在本地管理共享词库')
+            if old:
+                # Match case-insensitively without changing existing spelling implicitly.
+                updates={k:val for k,val in item.items() if k!='word' and old.get(k)!=val}
+                if 'active' in updates:updates.update(state='active' if item['active'] else 'disabled',protected=item['active'])
+                hid=old['id']
+                if updates:
+                    assignment=','.join(k+'=?' for k in updates)
+                    c.execute(f'update hotwords set {assignment},updated_at=? where id=?',(*updates.values(),ts,hid));kind='updated'
+                else:kind='unchanged'
+            else:
+                hid=str(uuid.uuid4());active=item.get('active',1)
+                c.execute('''insert into hotwords(id,word,kind,aliases,source,scope,weight,active,state,protected,
+                    frequency,confidence,score,owner_id,first_seen_at,last_seen_at,updated_at)
+                    values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+                    (hid,item['word'],item.get('kind','术语'),item.get('aliases',''),'manual','personal',item.get('weight',8),active,
+                     'active' if active else 'disabled',active,1,0.95,0,user['id'],ts,ts,ts));kind='created'
+            row=dict(c.execute('select * from hotwords where id=?',(hid,)).fetchone())
+            if kind!='unchanged':
+                c.execute('update hotwords set score=? where id=?',(m.hotword_row_score({**row,'score':0}),hid))
+                changes.append({'id':hid,'before':{k:old.get(k) for k in ('word','aliases','kind','weight','active')} if old else None,
+                                'after':{k:row.get(k) for k in ('word','aliases','kind','weight','active')}})
+            counts[kind]+=1
+            item_result={k:row[k] for k in ('id','word','aliases','kind','weight','active','updated_at')}
+            item_result['asr_eligible_terms']=m.hotword_terms(row,alias_limit=10) if row['active'] else []
+            result.append(item_result)
+        if changes:m.audit(c,user,'hotword.mcp_update',json.dumps(changes,ensure_ascii=False))
+    return {**counts,'items':result,'effective':'后续开始的本人转写会读取更新后的热词；ASR 仍按短词规则及数量上限筛选，asr_eligible_terms 为符合规则的候选词。不会改写历史转写或钉钉词库'}
+
+
 def read_action(action,args,user):
     m=core();limit=max(1,min(int(args.get('limit',20)),100));offset=max(0,int(args.get('offset',0)))
     if action=='connection_status':
         return {'authenticated':True,'name':user['name'],'role':user['role'],'worker':state('worker_heartbeat')}
     if action=='sync_status':return status(user)
     with m.db() as c:
+        if action=='hotwords':
+            query=str(args.get('query','')).strip()
+            if len(query)>200:raise HTTPException(400,'检索词过长')
+            rows=c.execute("select id,word,aliases,kind,weight,active,updated_at from hotwords where source='manual' and scope='personal' and owner_id=? and (instr(lower(word),lower(?))>0 or instr(lower(aliases),lower(?))>0) order by word,id limit ? offset ?",(user['id'],query,query,limit+1,offset)).fetchall()
+            return {'items':[dict(r) for r in rows[:limit]],'has_more':len(rows)>limit,'next_offset':offset+limit if len(rows)>limit else None,'scope':'personal'}
         if action in ('recordings','search'):
             where,params=m.recording_where(user,args.get('scope','mine'))
             recorded_at="coalesce((select datetime(s.source_start/1000,'unixepoch','+8 hours') from recording_sources s where s.recording_id=r.id limit 1),r.created_at)"
@@ -530,6 +603,9 @@ def install(app):
         try:p=json.loads(body);user=owner(p['user_id'])
         except (ValueError,KeyError):raise HTTPException(403,'用户无效或停用')
         action=p['action'];args=p.get('arguments',{})
+        if action=='update_hotwords':
+            if 'voice:manage' not in p.get('scopes',[]):raise HTTPException(403,'更新热词需要 voice:manage 授权，请重新连接并授权管理权限')
+            return update_hotwords(args,user)
         if action in ('sync','retry'):
             if 'voice:manage' not in p.get('scopes',[]):raise HTTPException(403,'需要管理授权')
             must_manage(user)

@@ -30,7 +30,7 @@ Disabling scheduled sync stops new scans, not existing queued work. Automatic na
 ## MCP connection
 
 URL: `https://ai.orchisky.cn/voice/mcp`
-Transport: Streamable HTTP. Authentication: OAuth 2.0 authorization code with PKCE S256. Dynamic registration is supported; no static client secret is needed. Required resource is the exact MCP URL. Default scope `voice:read`; optional `voice:manage` allows explicit sync and retry for the configured owner only.
+Transport: Streamable HTTP. Authentication: OAuth 2.0 authorization code with PKCE S256. Dynamic registration is supported; no static client secret is needed. Required resource is the exact MCP URL. Default scope `voice:read`; optional `voice:manage` allows personal hotword updates for the authenticated user, and explicit sync/retry for the configured DingTalk owner only.
 
 ChatGPT: Plugins → plus → Add custom MCP server → name and URL → OAuth → review and create as a plugin → connect using the local Voice username/password. In a new chat, select the plugin with @.
 
@@ -48,7 +48,7 @@ codex mcp login orchisky-voice --oauth-client-registration dcr --scopes voice:re
 
 For optional management tools, reauthorize with `--scopes voice:read,voice:manage`. Revoke individual grants on the local integration page. Access tokens last up to one hour; refresh credentials rotate and expire after 30 days. Refresh reuse revokes the grant.
 
-Tools: voice_connection_status, voice_list_recordings, voice_search, voice_get_transcript, voice_get_summary, voice_recording_detail, voice_sync_status, voice_sync_now, voice_retry_job. Transcript tools paginate up to 100 segments and return next_offset. Date filters use source recording time when available.
+Tools: voice_connection_status, voice_list_recordings, voice_search, voice_get_transcript, voice_get_summary, voice_recording_detail, voice_sync_status, voice_sync_now, voice_retry_job, voice_list_hotwords, voice_update_hotwords. Transcript tools paginate up to 100 segments and return next_offset. Date filters use source recording time when available.
 
 ## Verification and recovery
 
@@ -73,3 +73,19 @@ The Mac must be on, online, and logged into the macOS user session for LaunchAge
 
 - https://developers.openai.com/plugins/deploy/connect-chatgpt
 - https://learn.chatgpt.com/docs/extend/mcp?surface=cli
+
+## Claude interoperability and hotwords (2026-10-21 update)
+
+All client Origins are accepted on discovery, OAuth and MCP, per owner request. CORS supports preflight and exposes WWW-Authenticate. Cross-origin cookie credentials are not enabled. The canonical Host remains enforced; correct password, flow-bound consent cookie/CSRF, PKCE, token audience, per-call user access and write scope checks remain in force. Do not replace these with anonymous access. Existing grants are not expanded automatically.
+
+In Claude custom connector setup, use the same URL, OAuth sign-in and **Register automatically** (dynamic client registration), not the published-identity/CIMD option, which this server does not implement. Reconnect after deployment to refresh tools. A write-capable grant must include `voice:read voice:manage`. Clients requesting only read access can enable the unchecked optional management checkbox on the first-party consent page; it explicitly describes personal hotword updates and sync/retry side effects. The issued token reports actual granted scopes. Existing/read-only grants cannot write until the user reauthorizes.
+
+`voice_list_hotwords` lists only the caller's personal manual words (query/limit/offset). `voice_update_hotwords` accepts 1–100 entries, keyed case-insensitively by `word`. Optional fields: `aliases` (list of common misrecognitions; replaces aliases for that word), `kind`, `weight` (1–10), `active` (false disables). Omitted fields and unrelated words remain unchanged. All rows update in one transaction, with before/after audit records; duplicates or invalid entries reject the entire batch. No other user's or external/shared source words are altered.
+
+Example tool arguments:
+
+```json
+{"entries":[{"word":"金蝶","aliases":["金碟"],"weight":9},{"word":"兰之天","kind":"客户简称","weight":10}]}
+```
+
+These changes feed subsequent local transcription jobs; they do not reprocess historical transcripts or update DingTalk ASR vocabulary. Existing ASR filtering still applies (normally 2–8 characters and no formal company-name suffixes); returned `asr_eligible_terms` shows qualifying candidates. Personal product/system terms remain disabled across service restarts when explicitly disabled.

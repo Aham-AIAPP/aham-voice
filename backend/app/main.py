@@ -633,7 +633,8 @@ def ensure_schema() -> None:
             """
             update hotwords
             set protected = 1, state = 'active', active = 1
-            where source in ('系统内置', '产品库') or kind in ('产品', '系统')
+            where (source in ('系统内置', '产品库') or kind in ('产品', '系统'))
+              and not (source = 'manual' and scope = 'personal')
             """
         )
         conn.execute("create index if not exists idx_hotwords_source on hotwords(source, active, state)")

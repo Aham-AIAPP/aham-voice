@@ -85,6 +85,11 @@ class OAuth:
                 raise Denied('invalid_consent',403)
             data=json.loads(row['data'])
         if p.get('confirm')!='yes':raise Denied('consent_required',403)
+        if p.get('allow_manage') not in (None,'yes'):raise Denied('invalid_consent',403)
+        # Optional, explicit first-party consent enables clients which request
+        # only the default read scope. Never expand already-issued grants.
+        if p.get('allow_manage')=='yes' and 'voice:manage' not in data['scopes']:
+            data['scopes']=sorted([*data['scopes'],'voice:manage'])
         user=await self.login(p.get('username',''),p.get('password',''))
         if not user or user.get('role')=='admin' or user.get('must_change_password'):
             raise Denied('business_user_required',403)

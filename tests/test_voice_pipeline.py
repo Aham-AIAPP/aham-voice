@@ -90,5 +90,45 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(request('recordings',stamp='1').status_code,401)
         self.assertEqual(client.post('/api/internal/voice-mcp',json={}).status_code,401)
 
+    def test_hotwords_atomic_upsert_isolation_and_asr_package(self):
+        m.create_hotword({'word':'保留词','aliases':'原别名'},self.user)
+        m.create_hotword({'word':'金蝶','aliases':'其他用户别名'},v.owner('bob'))
+        with m.db() as c:external=[dict(r) for r in c.execute("select * from hotwords where source!='manual' or owner_id is null or owner_id!='alice'")]
+        result=v.update_hotwords({'entries':[{'word':'金蝶','aliases':['金碟'],'weight':9},{'word':'Orchisky'}]},self.user)
+        self.assertEqual(result['created'],2)
+        result=v.update_hotwords({'entries':[{'word':'金蝶','weight':10},{'word':'orchisky'}]},self.user)
+        self.assertEqual((result['updated'],result['unchanged']),(1,1))
+        items=v.read_action('hotwords',{'query':'金碟'},self.user)['items']
+        self.assertEqual(len(items),1);self.assertEqual(items[0]['weight'],10)
+        self.assertEqual(v.read_action('hotwords',{'query':'金碟'},v.owner('bob'))['items'],[])
+        self.assertEqual(len(v.read_action('hotwords',{'limit':2},self.user)['items']),2)
+        self.assertTrue(v.read_action('hotwords',{'limit':2},self.user)['has_more'])
+        with m.db() as c:
+            self.assertEqual(external,[dict(r) for r in c.execute("select * from hotwords where source!='manual' or owner_id is null or owner_id!='alice'")])
+            rec=dict(c.execute('select * from recordings where id=?',(self.rid,)).fetchone())
+            package=m.build_hotword_package(c,rec,self.user,persist=False)
+            self.assertIn('金碟',json.dumps(package,ensure_ascii=False))
+        v.update_hotwords({'entries':[{'word':'金蝶','active':False,'kind':'产品'}]},self.user)
+        with m.db() as c:
+            package=m.build_hotword_package(c,rec,self.user,persist=False)
+            self.assertNotIn('金碟',json.dumps(package,ensure_ascii=False))
+        m.ensure_schema()
+        self.assertEqual(v.read_action('hotwords',{'query':'金蝶'},self.user)['items'][0]['active'],0)
+        for invalid in [{'word':'合法词'},{'word':'非法 词'}], [{'word':'词','weight':True}], [{'word':'词','owner_id':'bob'}], [{'word':'重复'},{'word':'重复'}]:
+            with self.assertRaises(HTTPException):v.update_hotwords({'entries':invalid},self.user)
+        self.assertEqual(v.read_action('hotwords',{'query':'合法词'},self.user)['items'],[])
+        self.assertEqual(v.read_action('hotwords',{'query':'保留词'},self.user)['items'][0]['aliases'],'原别名')
+
+    def test_hotword_bridge_scope_required(self):
+        client=TestClient(m.app)
+        def request(scopes,user='alice'):
+            body=json.dumps({'action':'update_hotwords','user_id':user,'arguments':{'entries':[{'word':'测试词'}]},'scopes':scopes}).encode()
+            stamp=str(time.time());sig=hmac.new(b'k'*32,stamp.encode()+b'\n'+body,hashlib.sha256).hexdigest()
+            return client.post('/api/internal/voice-mcp',content=body,headers={'X-Voice-Time':stamp,'X-Voice-Signature':sig})
+        self.assertEqual(request(['voice:read']).status_code,403)
+        self.assertEqual(request(['voice:read','voice:manage']).status_code,200)
+        self.assertEqual(request(['voice:read','voice:manage'],'bob').status_code,200)
+        self.assertEqual(len(v.read_action('hotwords',{'query':'测试词'},self.user)['items']),1)
+
 
 if __name__=='__main__':unittest.main()
