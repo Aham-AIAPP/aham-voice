@@ -6,6 +6,8 @@ import html
 import json
 import os
 import time
+import re
+import secrets
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
@@ -22,6 +24,21 @@ from starlette.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field
 
 from .oauth import OAuth, Denied
+
+
+def consent_cookie_name(flow):
+    return 'voice_consent_'+hashlib.sha256(flow.encode()).hexdigest()[:24]
+
+
+def page_policy(callback=None,nonce=None):
+    sources="'self'"
+    if callback:
+        u=urlsplit(callback);host=(u.hostname or '').encode('idna').decode('ascii')
+        if u.scheme not in ('https','http') or not re.fullmatch(r'[A-Za-z0-9.:-]+',host):raise Denied('invalid_redirect_uri')
+        if ':' in host:host='['+host+']'
+        sources+=' '+u.scheme+'://'+host+(':'+str(u.port) if u.port else '')
+    script="; script-src 'nonce-"+nonce+"'" if nonce else ''
+    return "default-src 'none'; style-src 'unsafe-inline'; form-action "+sources+"; frame-ancestors 'none'; base-uri 'none'"+script
 
 
 class HotwordUpdate(BaseModel):
@@ -85,7 +102,9 @@ class Boundary:
             return await receive()
         async def secured(message):
             if message['type']=='http.response.start':
-                message['headers']+= [(b'cache-control',b'no-store'),(b'referrer-policy',b'no-referrer'),(b'x-content-type-options',b'nosniff'),(b'content-security-policy',b"default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")]
+                message['headers']+= [(b'cache-control',b'no-store'),(b'referrer-policy',b'no-referrer'),(b'x-content-type-options',b'nosniff')]
+                if not any(k.lower()==b'content-security-policy' for k,v in message['headers']):
+                    message['headers'].append((b'content-security-policy',page_policy().encode()))
             await send(message)
         await self.app(scope,replay,secured)
 
@@ -193,16 +212,29 @@ def create_app(auth,backend):
     async def register(req):return JSONResponse(auth.register(await req.json()),status_code=201)
 
     async def authorize(req):
-        flow,csrf,cookie,data=auth.begin(params(req.url.query));esc=html.escape
+        flow,csrf,cookie,data=auth.begin(params(req.url.query));esc=html.escape;nonce=secrets.token_urlsafe(18)
         rights='读取有权限查看的录音、逐字稿、纪要及同步状态'
         if 'voice:manage' in data['scopes']:rights+='；新增、更新或停用本地个人热词；手动触发钉钉同步和失败重试（会按既定设置自动命名并回写钉钉）'
         optional_manage='' if 'voice:manage' in data['scopes'] else '<label><input type="checkbox" name="allow_manage" value="yes"> 同时允许管理：新增、更新或停用个人热词；已绑定钉钉的账号还可手动同步、重试（包含自动改名和回写）。不勾选则只读。</label>'
-        page=f'''<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Orchisky Voice 授权</title><style>body{{font:16px system-ui;background:#f4f6f8;color:#132333;margin:0;padding:8vh 20px}}main{{max-width:520px;margin:auto;background:white;padding:32px;border-radius:16px}}label{{display:block;margin:20px 0}}input:not([type=checkbox]){{display:block;width:95%;padding:12px;margin-top:6px;border:1px solid #bac4d0;border-radius:6px}}button{{background:#126c60;color:white;border:0;padding:12px 24px;border-radius:8px;font-size:16px}}small{{word-break:break-all;color:#596572}}</style><main><h1>授权访问录音转写</h1><p>客户端：{esc(data['client_name'])}</p><p>授权范围：{esc(rights)}。</p><p>录音保存在 Mac mini，查询结果会提供给你连接的客户端。</p><small>回调地址：{esc(data['redirect_uri'])}</small><form action="/voice/oauth/consent" method="post"><input type="hidden" name="flow" value="{esc(flow)}"><input type="hidden" name="csrf" value="{esc(csrf)}"><label>本地录音系统账号<input name="username" required autocomplete="username"></label><label>密码<input type="password" name="password" required autocomplete="current-password"></label>{optional_manage}<label><input type="checkbox" name="confirm" value="yes" required> 同意以上范围</label><button>登录并授权</button></form></main></html>'''
-        r=HTMLResponse(page);r.set_cookie('voice_consent',cookie,secure=True,httponly=True,samesite='lax',path='/voice/oauth/',max_age=600);return r
+        page=f'''<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Orchisky Voice 授权</title><style>body{{font:16px system-ui;background:#f4f6f8;color:#132333;margin:0;padding:8vh 20px}}main{{max-width:520px;margin:auto;background:white;padding:32px;border-radius:16px}}label{{display:block;margin:20px 0}}input:not([type=checkbox]){{display:block;width:95%;padding:12px;margin-top:6px;border:1px solid #bac4d0;border-radius:6px}}button{{background:#126c60;color:white;border:0;padding:12px 24px;border-radius:8px;font-size:16px}}small{{word-break:break-all;color:#596572}}</style><main><h1>授权访问录音转写</h1><p>客户端：{esc(data['client_name'])}</p><p>授权范围：{esc(rights)}。</p><p>录音保存在 Mac mini，查询结果会提供给你连接的客户端。</p><small>回调地址：{esc(data['redirect_uri'])}</small><form action="/voice/oauth/consent" method="post"><input type="hidden" name="flow" value="{esc(flow)}"><input type="hidden" name="csrf" value="{esc(csrf)}"><label>本地录音系统账号<input name="username" required autocomplete="username"></label><label>密码<input type="password" name="password" required autocomplete="current-password"></label>{optional_manage}<label><input type="checkbox" name="confirm" value="yes" required> 同意以上范围</label><button id="submit">登录并授权</button><p id="progress" role="status" aria-live="polite"></p></form></main><script nonce="{nonce}">const form=document.querySelector('form'),button=document.getElementById('submit'),progress=document.getElementById('progress');form.addEventListener('submit',event=>{{if(button.disabled){{event.preventDefault();return;}}button.disabled=true;button.textContent='正在登录并返回客户端…';progress.textContent='正在处理，请勿重复点击。';}});window.addEventListener('pageshow',()=>{{button.disabled=false;button.textContent='登录并授权';progress.textContent='';}});</script></html>'''
+        r=HTMLResponse(page,headers={'Content-Security-Policy':page_policy(data['redirect_uri'],nonce)});r.set_cookie(consent_cookie_name(flow),cookie,secure=True,httponly=True,samesite='lax',path='/voice/oauth/',max_age=600);return r
 
     async def consent(req):
-        url=await auth.consent(await form(req),req.cookies.get('voice_consent',''))
-        r=RedirectResponse(url,status_code=303);r.delete_cookie('voice_consent',path='/voice/oauth/');return r
+        p=await form(req)
+        try:
+            cookie=req.cookies.get(consent_cookie_name(p.get('flow','')),req.cookies.get('voice_consent',''))
+            url=await auth.consent(p,cookie)
+        except Denied as e:
+            messages={
+                'consent_already_submitted':('这次授权已提交','请返回 Claude 或原客户端查看连接结果。如果仍未连接，请关闭此页，从客户端重新发起连接；不要再次提交旧表单。'),
+                'invalid_consent':('授权页面已失效','请关闭此页，从 Claude 或原客户端重新点击连接，再登录授权。旧页面可能已经提交或超过有效期。'),
+                'invalid_credentials':('账号或密码不正确','请返回上一页，使用本地录音系统的账号密码重试。'),
+                'business_user_required':('账号暂不能授权','请先在本地录音系统确认账号状态并完成密码修改，再重新连接。')}
+            title,message=messages.get(e.code,('未完成授权','请从客户端重新发起连接，并勾选同意授权。'))
+            return HTMLResponse('<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>'+title+'</title><body style="font:17px/1.7 system-ui;max-width:580px;margin:12vh auto;padding:24px"><h1>'+title+'</h1><p>'+message+'</p></body></html>',status_code=e.status)
+        # Keep the short-lived, per-flow cookie for a helpful duplicate-submit
+        # response. It grants no data access and expires after ten minutes.
+        return RedirectResponse(url,status_code=303,headers={'Content-Security-Policy':page_policy(url)})
 
     async def token(req):return JSONResponse(auth.token(await form(req)))
     async def revoke(req):auth.revoke(await form(req));return JSONResponse({})

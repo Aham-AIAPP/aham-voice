@@ -5,7 +5,7 @@ from urllib.parse import parse_qs,urlsplit
 import pytest
 from starlette.testclient import TestClient
 from mcp_service.oauth import OAuth,Denied,challenge
-from mcp_service.server import create_app
+from mcp_service.server import create_app,consent_cookie_name,page_policy
 
 ISSUER='https://ai.orchisky.cn/voice'
 
@@ -148,3 +148,39 @@ def test_management_scope_requires_explicit_consent(auth):
         token=auth.token({'client_id':c['client_id'],'redirect_uri':p['redirect_uri'],'code':code,'grant_type':'authorization_code','code_verifier':'a'*43,'resource':auth.resource})
         assert ('voice:manage' in token['scope'].split())==opted_in
         assert ('voice:manage' in auth.resolve(token['access_token'])['scopes'].split())==opted_in
+
+
+def test_duplicate_consent_creates_only_one_code(auth):
+    c,p,form,cookie=begin(auth)
+    asyncio.run(auth.consent(form,cookie))
+    with pytest.raises(Denied) as exc:asyncio.run(auth.consent(form,cookie))
+    assert exc.value.code=='consent_already_submitted'
+    with auth.db() as db:assert db.execute('select count(*) from codes').fetchone()[0]==1
+    with pytest.raises(Denied) as exc:asyncio.run(auth.consent(form,'wrong'))
+    assert exc.value.code=='invalid_consent'
+
+
+def test_browser_callback_csp_separate_tabs_and_friendly_repeat(auth):
+    import re
+    c=auth.register({'redirect_uris':['https://claude.ai/api/mcp/auth_callback'],'client_name':'Claude'})
+    p={'client_id':c['client_id'],'redirect_uri':c['redirect_uris'][0],'response_type':'code','resource':auth.resource,'code_challenge_method':'S256','code_challenge':challenge('z'*43),'state':'test','scope':'voice:read'}
+    with TestClient(create_app(auth,None),base_url='https://ai.orchisky.cn') as client:
+        forms=[]
+        for _ in range(2):
+            response=client.get('/voice/oauth/authorize',params=p)
+            fields={k:re.search('name="'+k+'" value="([^"]+)"',response.text).group(1) for k in ['flow','csrf']}
+            nonce=re.search('<script nonce="([^"]+)"',response.text).group(1)
+            assert len(response.headers.get_list('content-security-policy'))==1
+            assert "form-action 'self' https://claude.ai;" in response.headers['content-security-policy']
+            assert "script-src 'nonce-"+nonce+"'" in response.headers['content-security-policy']
+            assert consent_cookie_name(fields['flow']) in client.cookies
+            forms.append({**fields,'username':'alice','password':'test-password','confirm':'yes'})
+        for form in forms:
+            response=client.post('/voice/oauth/consent',data=form,follow_redirects=False)
+            assert response.status_code==303
+            assert response.headers['location'].startswith('https://claude.ai/api/mcp/auth_callback?')
+            assert "form-action 'self' https://claude.ai;" in response.headers['content-security-policy']
+            duplicate=client.post('/voice/oauth/consent',data=form)
+            assert duplicate.status_code==409 and '这次授权已提交' in duplicate.text
+        assert 'http://127.0.0.1:9000' in page_policy('http://127.0.0.1:9000/callback')
+        with pytest.raises(Denied):page_policy('https://evil.example;script-src/callback')

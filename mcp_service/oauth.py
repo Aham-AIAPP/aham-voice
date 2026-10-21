@@ -35,6 +35,7 @@ class OAuth:
             create table if not exists codes(hash text primary key,data text not null,expires real);
             create table if not exists grants(id text primary key,user_id text,client_id text,scopes text,created real,expires real,revoked integer default 0);
             create table if not exists tokens(hash text primary key,grant_id text,kind text,expires real,used integer default 0);
+            create table if not exists completed_flows(id text primary key,csrf text,cookie text,expires real);
             ''')
 
     @contextmanager
@@ -75,12 +76,17 @@ class OAuth:
             data={k:p.get(k,'') for k in ('client_id','redirect_uri','state','code_challenge')}
             data['scopes']=sorted(set(scopes));data['client_name']=client['client_name']
             c.execute('delete from flows where expires<?',(time.time(),));c.execute('delete from codes where expires<?',(time.time(),))
+            c.execute('delete from completed_flows where expires<?',(time.time(),))
             c.execute('insert into flows values(?,?,?,?,?)',(digest(flow),json.dumps(data),digest(csrf),digest(cookie),time.time()+600))
         return flow,csrf,cookie,data
 
     async def consent(self,p,cookie):
         with self.db() as c:
             row=c.execute('select * from flows where id=?',(digest(p.get('flow','')),)).fetchone()
+            if not row:
+                done=c.execute('select * from completed_flows where id=? and expires>?',(digest(p.get('flow','')),time.time())).fetchone()
+                if done and hmac.compare_digest(done['csrf'],digest(p.get('csrf',''))) and hmac.compare_digest(done['cookie'],digest(cookie)):
+                    raise Denied('consent_already_submitted',409)
             if not row or row['expires']<time.time() or not hmac.compare_digest(row['csrf'],digest(p.get('csrf',''))) or not hmac.compare_digest(row['cookie'],digest(cookie)):
                 raise Denied('invalid_consent',403)
             data=json.loads(row['data'])
@@ -96,7 +102,8 @@ class OAuth:
         code=random();data['user_id']=user['id']
         with self.db() as c:
             removed=c.execute('delete from flows where id=? and expires>?',(digest(p['flow']),time.time())).rowcount
-            if not removed:raise Denied('invalid_consent',403)
+            if not removed:raise Denied('consent_already_submitted',409)
+            c.execute('insert into completed_flows values(?,?,?,?)',(row['id'],row['csrf'],row['cookie'],time.time()+600))
             c.execute('insert into codes values(?,?,?)',(digest(code),json.dumps(data),time.time()+120))
         sep='&' if '?' in data['redirect_uri'] else '?'
         return data['redirect_uri']+sep+urlencode({'code':code,'state':data['state'],'iss':self.issuer})

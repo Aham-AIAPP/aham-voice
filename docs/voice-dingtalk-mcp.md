@@ -89,3 +89,9 @@ Example tool arguments:
 ```
 
 These changes feed subsequent local transcription jobs; they do not reprocess historical transcripts or update DingTalk ASR vocabulary. Existing ASR filtering still applies (normally 2–8 characters and no formal company-name suffixes); returned `asr_eligible_terms` shows qualifying candidates. Personal product/system terms remain disabled across service restarts when explicitly disabled.
+
+## Browser consent redirect correction
+
+Browser testing reproduced a consumed consent form with an unredeemed authorization code: the original `form-action 'self'` policy blocked the POST's external 303 callback. Authorization and consent responses now permit the registered callback origin, with a single response CSP header. No arbitrary callback is accepted; registered redirect and PKCE validation remain unchanged.
+
+The login form uses a nonce-authorized submit handler to show progress and disable duplicate submissions. Every flow has its own short-lived consent cookie, so opening a second authorization tab does not invalidate the first. Completed flows retain only hashes for ten minutes to display a friendly already-submitted page; they never issue a second authorization code. Expired/old forms explain how to restart from the client. Existing consumed forms cannot be reused: reconnect from Claude to obtain a new form.
