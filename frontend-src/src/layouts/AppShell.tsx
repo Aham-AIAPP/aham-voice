@@ -26,6 +26,7 @@ function memberSections(): NavSectionDef[] {
       items: [
         { to: "/app/recordings/new", icon: "plus", label: "新增" },
         { to: "/app/recordings", icon: "audio-lines", label: "录音库", end: true },
+        { to: "/app/integrations", icon: "plug", label: "钉钉同步与 MCP" },
       ],
     },
     {
@@ -80,6 +81,7 @@ function buildBreadcrumb(pathname: string): { href?: string; label: string }[] {
     new: "上传录音",
     hotwords: "热词",
     voiceprints: "声纹",
+    integrations: "钉钉同步与 MCP",
     overview: "总览",
     users: "用户",
     teams: "团队",

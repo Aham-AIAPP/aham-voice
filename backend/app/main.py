@@ -191,7 +191,7 @@ DEFAULT_VOICEPRINT_THRESHOLD = 0.66
 
 @contextmanager
 def db() -> Any:
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
     try:
         yield conn
@@ -1467,6 +1467,7 @@ def get_asr_model() -> Any:
                     spk_model=str(CAMPLUS),
                     device=ASR_DEVICE,
                     disable_update=True,
+                    disable_pbar=True,
                 )
     return _asr_model
 
@@ -2886,8 +2887,7 @@ def process_recording_background(recording_id: str, user: dict[str, Any]) -> Non
 @app.on_event("startup")
 def startup() -> None:
     ensure_schema()
-    recover_interrupted_tasks()
-    recover_queued_recordings()
+    voice_integration.ensure_schema()
     _start_cleanup_loop()
 
 
@@ -2925,6 +2925,7 @@ def login(payload: dict[str, str]) -> dict[str, Any]:
                 "update users set failed_login_count = ?, locked_until = ?, updated_at = ? where id = ?",
                 (failed, locked_until, now(), user["id"]),
             )
+            conn.commit()  # Persist lockout even though the request raises below.
             raise HTTPException(status_code=401, detail="账号或密码错误")
         token = create_session(conn, user["id"])
         conn.execute(
@@ -3679,6 +3680,18 @@ def upload_recording(
     expected_speakers: int | None = Form(None),
     user: dict[str, Any] = Depends(current_user),
 ) -> dict[str, Any]:
+    return create_recording(
+        background_tasks, file, title, meeting_type, tag, auto_process,
+        expected_speakers, user,
+    )
+
+
+def create_recording(
+    background_tasks: BackgroundTasks, file: UploadFile, title: str,
+    meeting_type: str, tag: str, auto_process: bool,
+    expected_speakers: int | None, user: dict[str, Any],
+) -> dict[str, Any]:
+    """Shared recording business service. Caller must authenticate its principal."""
     if user["role"] == "admin":
         raise HTTPException(status_code=403, detail="admin cannot upload recordings")
     rec_id = str(uuid.uuid4())
@@ -3711,36 +3724,40 @@ def upload_recording(
     if written == 0:
         target.unlink(missing_ok=True)
         raise HTTPException(status_code=400, detail="uploaded file is empty")
-    duration = probe_duration(target)
-    with db() as conn:
-        conn.execute(
-            """
-            insert into recordings(id,title,filename,file_path,meeting_type,tag,owner_id,team_id,duration,duration_label,asr_status,summary_status,expected_speakers,created_at,updated_at)
-            values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-            """,
-            (
-                rec_id,
-                title.strip() or Path(file.filename or "录音").stem,
-                file.filename or target.name,
-                str(target),
-                meeting_type,
-                tag,
-                user["id"],
-                user.get("team_id"),
-                duration,
-                seconds_label(duration),
-                "queued" if auto_process else "pending",
-                "pending",
-                (expected_speakers if (expected_speakers and 2 <= expected_speakers <= 50) else None),
-                now(),
-                now(),
-            ),
-        )
-        audit(conn, user, "recording", f"上传录音：{title.strip() or file.filename}。")
-        rec = rowdict(conn.execute("select * from recordings where id = ?", (rec_id,)).fetchone())
-        payload = recording_payload(conn, rec)
-    if auto_process:
-        background_tasks.add_task(process_recording_background, rec_id, dict(user))
+    try:
+        duration = probe_duration(target)
+        with db() as conn:
+            conn.execute(
+                """
+                insert into recordings(id,title,filename,file_path,meeting_type,tag,owner_id,team_id,duration,duration_label,asr_status,summary_status,expected_speakers,created_at,updated_at)
+                values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    rec_id,
+                    title.strip() or Path(file.filename or "录音").stem,
+                    file.filename or target.name,
+                    str(target),
+                    meeting_type,
+                    tag,
+                    user["id"],
+                    user.get("team_id"),
+                    duration,
+                    seconds_label(duration),
+                    "queued" if auto_process else "pending",
+                    "pending",
+                    (expected_speakers if (expected_speakers and 2 <= expected_speakers <= 50) else None),
+                    now(),
+                    now(),
+                ),
+            )
+            audit(conn, user, "recording", f"上传录音：{title.strip() or file.filename}。")
+            rec = rowdict(conn.execute("select * from recordings where id = ?", (rec_id,)).fetchone())
+            payload = recording_payload(conn, rec)
+            if auto_process:
+                voice_integration.enqueue(rec_id, user['id'], connection=conn)
+    except Exception:
+        target.unlink(missing_ok=True)
+        raise
     return payload
 
 
@@ -3754,12 +3771,8 @@ def process_api(
         rec = can_access_recording(conn, recording_id, user)
         if rec["asr_status"] == "running" or rec["summary_status"] == "running":
             raise HTTPException(status_code=409, detail="recording is already processing")
-        conn.execute(
-            "update recordings set asr_status = ?, summary_status = ?, updated_at = ? where id = ?",
-            ("queued", "pending", now(), recording_id),
-        )
         audit(conn, user, "recording.process", f"{user['name']} 启动完整处理：{rec['title']}。")
-    background_tasks.add_task(process_recording_background, recording_id, dict(user))
+    voice_integration.enqueue(recording_id, user['id'], reset=True)
     return {"recording_id": recording_id, "status": "queued"}
 
 
@@ -3892,12 +3905,14 @@ def recording_audio(recording_id: str, user: dict[str, Any] = Depends(current_us
 
 @app.post("/api/recordings/{recording_id}/transcribe")
 def transcribe_api(recording_id: str, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
-    return transcribe_recording(recording_id, user)
+    job_id=voice_integration.enqueue(recording_id,user['id'],'transcribe_only')
+    return {'recording_id':recording_id,'job_id':job_id,'status':'queued'}
 
 
 @app.post("/api/recordings/{recording_id}/summarize")
 async def summarize_api(recording_id: str, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
-    return await summarize_recording(recording_id, user)
+    job_id=voice_integration.enqueue(recording_id,user['id'],'summary_only')
+    return {'recording_id':recording_id,'job_id':job_id,'status':'queued'}
 
 
 @app.post("/api/recordings/{recording_id}/summary/revise")
@@ -4734,3 +4749,7 @@ def admin_overview(user: dict[str, Any] = Depends(current_user)) -> dict[str, An
         ],
         "recent_audit": recent_audit,
     }
+
+# Register after the existing authentication and business services are defined.
+from . import voice_integration
+voice_integration.install(app)

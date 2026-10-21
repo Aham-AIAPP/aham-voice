@@ -9,6 +9,7 @@ import { RecordingNew } from "@/pages/app/RecordingNew";
 import { RecordingDetail } from "@/pages/app/RecordingDetail";
 import { Hotwords } from "@/pages/app/Hotwords";
 import { Voiceprints } from "@/pages/app/Voiceprints";
+import { Integrations } from "@/pages/app/Integrations";
 import { AdminOverview } from "@/pages/admin/Overview";
 import { AdminUsers } from "@/pages/admin/Users";
 import { AdminTeams } from "@/pages/admin/Teams";
@@ -64,6 +65,7 @@ export const router = createBrowserRouter([
       { path: "recordings/:id", element: <RecordingDetail /> },
       { path: "hotwords", element: <Hotwords /> },
       { path: "voiceprints", element: <Voiceprints /> },
+      { path: "integrations", element: <Integrations /> },
     ],
   },
   {
