@@ -158,7 +158,7 @@ test('说话人命名保持长片段建声纹和短片段仅命名的契约', as
   await page.getByLabel('说话人姓名').fill('林悦新姓名');
   await page.getByLabel('说话人姓名').press('Enter');
   await expect(page.locator('.record-speakers').getByRole('button',{name:'林悦新姓名',exact:true})).toBeVisible();
-  await page.locator('.record-speakers').getByRole('button',{name:'Speaker 2',exact:true}).click();
+  await page.locator('.record-speakers').getByRole('button',{name:'说话人 2',exact:true}).click();
   await page.getByLabel('说话人姓名').fill('陈言');
   await page.getByLabel('说话人姓名').press('Enter');
   await expect(page.locator('.record-speakers').getByRole('button',{name:'陈言',exact:true})).toBeVisible();
@@ -225,7 +225,7 @@ test('主题持久化、命令搜索、手机导航与键盘关闭', async ({pag
 
 for (const width of [1440,1024,390,320]) for(const theme of ['light','dark']) {
   test('列表与详情布局 '+width+' '+theme, async ({page},testInfo) => {
-    const f=await setup(page);
+    const f=await setup(page,{richContent:true});
     await page.setViewportSize({width,height:900});
     await page.addInitScript(value=>localStorage.setItem('voice.theme',value),theme);
     await page.goto('/app/recordings');
@@ -247,6 +247,30 @@ for (const width of [1440,1024,390,320]) for(const theme of ['light','dark']) {
     expect(f.unexpected).toEqual([]);expect(f.errors).toEqual([]);
   });
 }
+
+for (const width of [1440,390]) test('长逐字稿的定位、播放与固定控件 '+width, async ({page},testInfo) => {
+  const f = await setup(page,{richContent:true,longTranscript:true});
+  await page.setViewportSize({width,height:900});
+  await page.goto('/app/recordings/rec-0');
+  await expect(page.locator('.nav-item[href="/app/recordings"]')).toHaveClass(/is-active/);
+  await page.getByRole('navigation',{name:'内容导航'}).getByRole('link',{name:'逐字稿',exact:true}).click();
+  await expect.poll(()=>page.locator('#record-transcript').evaluate(el=>el.getBoundingClientRect().top)).toBeLessThan(220);
+  const positions=await page.evaluate(()=>({section:document.querySelector('#record-transcript').getBoundingClientRect().top,tools:document.querySelector('.record-reading-tools').getBoundingClientRect().bottom}));
+  expect(positions.section).toBeGreaterThanOrEqual(positions.tools);
+  await page.getByRole('button',{name:'播放 00:01 的发言',exact:true}).click();
+  await expect.poll(()=>page.locator('.record-audio audio').evaluate(audio=>audio.currentTime)).toBeGreaterThanOrEqual(1);
+  await page.locator('.record-audio audio').evaluate(audio=>audio.pause());
+  await expect(page.locator('.record-transcript > li[aria-current="true"]')).toContainText('需要保留现有功能');
+  await page.locator('.record-audio audio').evaluate(audio=>{audio.currentTime=0.5;});
+  await expect(page.locator('.record-transcript > li[aria-current="true"]')).toContainText('第一轮试用');
+  await page.locator('#main').evaluate(el=>{el.scrollTop += 800;});
+  await expect.poll(()=>page.locator('.record-reading-tools').evaluate(el=>el.getBoundingClientRect().top)).toBe(44);
+  await page.getByRole('navigation',{name:'内容导航'}).getByRole('link',{name:'会议纪要',exact:true}).click();
+  await expect.poll(()=>page.locator('#record-summary').evaluate(el=>el.getBoundingClientRect().top)).toBeLessThan(220);
+  expect(await page.locator('#main').evaluate(el=>el.scrollWidth<=el.clientWidth+1)).toBe(true);
+  await page.screenshot({path:testInfo.outputPath('reading-tools.png'),animations:'disabled'});
+  expect(f.unexpected).toEqual([]); expect(f.errors).toEqual([]);
+});
 
 for (const role of ['member','admin']) test('全站页面烟雾检查 '+role, async({page},testInfo)=>{
   const f=await setup(page,{role});

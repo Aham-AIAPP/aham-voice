@@ -64,12 +64,12 @@ export function RecordingsList() {
         </div>}
         <label className="recordings-search">
           <Icon name="search" size={14} />
-          <input type="search" aria-label="搜索录音" placeholder="搜索标题、客户、标签、负责人" value={q} onChange={e => filter('q', e.target.value)} />
+          <input type="search" aria-label="搜索录音" placeholder="搜索标题、客户、标签、成员" value={q} onChange={e => filter('q', e.target.value)} />
         </label>
         <Button variant="primary" onClick={() => navigate('/app/recordings/new')}>上传录音</Button>
       </div>
       <div className="recordings-filters">
-        <span className="recordings-count" role="status">{query.isLoading ? '加载中' : filtered.length + ' 条录音'}</span>
+        <span className="recordings-count" role="status">{query.isLoading ? '加载中' : query.isError ? '加载失败' : filtered.length + ' 条录音'}</span>
         <select value={state} onChange={e => filter('status', e.target.value)} aria-label="处理状态">
           <option value="all">全部状态</option><option value="active">处理中</option><option value="failed">处理失败</option><option value="done">已生成</option><option value="pending">未完成</option>
         </select>
@@ -82,20 +82,20 @@ export function RecordingsList() {
         <EmptyState description={hasFilters ? '当前条件没有匹配的录音。' : '还没有录音，上传一段开始。'} action={<Button onClick={() => hasFilters ? clearFilters() : navigate('/app/recordings/new')}>{hasFilters ? '清除筛选' : '上传录音'}</Button>} />
       ) : <table className="recordings-table" aria-label="录音库">
         <colgroup><col /><col className="recordings-state" /><col className="recordings-type" /><col className="recordings-tag" /><col className="recordings-duration" /><col className="recordings-date" /><col className="recordings-owner" /></colgroup>
-        <thead className="sr-only"><tr><th>录音</th><th>状态</th><th>会议类型</th><th>客户 / 项目</th><th>时长</th><th>更新时间</th><th>负责人</th></tr></thead>
+        <thead className="recordings-columns"><tr><th scope="col">录音名称</th><th scope="col">状态</th><th scope="col">会议类型</th><th scope="col" className="recordings-tag">客户 / 项目</th><th scope="col" className="recordings-duration">时长</th><th scope="col" className="recordings-date">更新</th><th scope="col" className="recordings-owner">成员</th></tr></thead>
         <tbody>{[...groups.entries()].sort(([a], [b]) => b.localeCompare(a)).map(([day, rows]) => <Fragment key={day}>
-          <tr className="recordings-group"><th colSpan={7} scope="rowgroup">{day}<span>{rows.length}</span></th></tr>
+          <tr className="recordings-group"><th colSpan={7} scope="rowgroup">{day}<span>{rows.length} 条</span></th></tr>
           {rows.map(rec => {
             const status = recordingStatus(rec);
             const to = '/app/recordings/' + rec.id;
             return <tr key={rec.id} className="recordings-row" onClick={e => { if (!(e.target as HTMLElement).closest('a')) navigate(to, { state: { backTo } }); }}>
               <td className="recordings-name"><Link to={to} state={{ backTo }} title={rec.title}>{rec.title}</Link></td>
               <td className="recordings-state"><Status tone={status.tone}>{status.label}</Status></td>
-              <td className="recordings-type"><span className="recording-tag">{rec.meeting_type}</span></td>
-              <td className="recordings-tag" title={rec.tag ?? undefined}>{rec.tag}</td>
+              <td className="recordings-type"><span className="recording-tag">{rec.meeting_type || '未选择'}</span></td>
+              <td className="recordings-tag" title={rec.tag ?? undefined}>{rec.tag || '未填写'}</td>
               <td className="recordings-duration tnum">{rec.duration_label}</td>
               <td className="recordings-date" title={rec.updated_at}>{rec.updated_at?.slice(11, 16)}</td>
-              <td className="recordings-owner"><span title={rec.owner_name} aria-label={'负责人：' + rec.owner_name}><Avatar name={rec.owner_name} size="sm" /></span></td>
+              <td className="recordings-owner"><span title={rec.owner_name || '未指定'} aria-label={'所属成员：' + (rec.owner_name || '未指定')}><Avatar name={rec.owner_name} size="sm" /></span></td>
             </tr>;
           })}
         </Fragment>)}</tbody>

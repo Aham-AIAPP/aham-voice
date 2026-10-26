@@ -59,6 +59,7 @@ export function ReviseComposer({ recordingId, currentSummaryId, onPreviewChange,
     {draft ? <section className="revision-preview" aria-labelledby="revision-preview-title">
       <h3 id="revision-preview-title" tabIndex={-1} ref={previewRef}>改写预览 · 待你确认</h3>
       <p className="record-source">AI 生成 · {draft.model} · <a href="#record-transcript">查看逐字稿依据</a></p>
+      <p className="revision-request"><span>修改要求</span>{text.trim()}</p>
       <details className="record-fold"><summary>对照改写前的纪要</summary><article className="markdown record-prose"><ReactMarkdown remarkPlugins={[remarkGfm]}>{draft.base_content}</ReactMarkdown></article></details>
       <article className="markdown record-prose revision-draft"><ReactMarkdown remarkPlugins={[remarkGfm]}>{draft.content}</ReactMarkdown></article>
       <p className="record-muted" role="status">{stale ? '当前纪要已有更新，请重新生成预览。' : '确认后保存为新版本，原版保留。取消后当前纪要不变。'}</p>

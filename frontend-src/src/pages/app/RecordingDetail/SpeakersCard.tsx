@@ -183,7 +183,7 @@ function SpeakerTile({
             autoFocus
             value={draft}
             disabled={nameMut.isPending}
-            placeholder={`Speaker ${candidate.speaker}`}
+            placeholder={`说话人 ${candidate.speaker}`}
             onChange={(e) => setDraft(e.target.value)}
             onBlur={commit}
             onKeyDown={(e) => {
@@ -208,7 +208,7 @@ function SpeakerTile({
               color: candidate.speaker_name ? "var(--fg-default)" : "var(--fg-subtle)",
             }}
           >
-            {candidate.speaker_name ? candidate.speaker_name : `Speaker ${candidate.speaker}`}
+            {candidate.speaker_name ? candidate.speaker_name : `说话人 ${candidate.speaker}`}
           </button>
         )}
         <span className="speaker-tile__meta u-shrink-0">{candidate.segment_count} 段</span>

@@ -15,10 +15,12 @@ export async function setup(page, options = {}) {
     { id: 'summary-2', recording_id: 'rec-0', version: 2, content: state.emptySummary ? '   ' : '# 会议纪要\n\n确认试用范围，保留原有数据与权限。', model: 'test-model', is_current: 1, created_at: '2026-10-26 09:10:00', instruction: null },
     { id: 'summary-1', recording_id: 'rec-0', version: 1, content: '# 历史纪要\n\n这是第一版内容。', model: 'test-model', is_current: 0, created_at: '2026-10-26 09:05:00', instruction: null },
   ];
+  if (state.richContent) summaries[0].content = '# 会议纪要\n\n确认试用范围，保留原有数据与权限。\n\n## 已确认事项\n\n- 先验证录音上传、逐字稿与会议纪要的完整流程。\n- 由林悦整理试用材料，陈言核对交付范围。\n- 现有账号权限和历史版本继续保留。\n\n## 行动安排\n\n| 事项 | 负责人 | 完成时间 |\n| --- | --- | --- |\n| 整理试用材料 | 林悦 | 2026-10-28 |\n| 核对交付范围 | 陈言 | 2026-10-30 |\n\n## 待确认\n\n试用后的验收时间由双方另行确认。纪要中的结论需结合逐字稿核对。';
   const segments = [
     { id: 'seg-1', speaker: '1', speaker_name: '林悦', start_sec: 0, end_sec: 1, start_label: '00:00', text: '第一轮试用先确认需求。', voiceprint_id: 'vp-1' },
     { id: 'seg-2', speaker: '2', speaker_name: null, start_sec: 1, end_sec: 2, start_label: '00:01', text: '需要保留现有功能。', voiceprint_id: null },
   ];
+  if (state.longTranscript) for (let i = 2; i < 40; i++) segments.push({ ...segments[i % 2], id: 'seg-' + (i + 1), start_sec: i, end_sec: i + 1, start_label: '00:' + String(i).padStart(2, '0'), text: '按既定范围继续核对会议事项，并记录待确认的内容。' });
   const candidates = [
     { speaker: '1', speaker_name: '林悦', display_name: '林悦', total_duration: 10, total_duration_label: '00:10', segment_count: 1, voiceprint_id: 'vp-1', sample_segments: [segments[0]] },
     { speaker: '2', speaker_name: null, display_name: 'Speaker 2', total_duration: 2, total_duration_label: '00:02', segment_count: 1, voiceprint_id: null, sample_segments: [segments[1]] },

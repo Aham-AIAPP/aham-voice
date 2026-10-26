@@ -31,6 +31,7 @@ function RecordingContent({ recordingId }: { recordingId: string }) {
   const backTo = typeof from === 'string' && (from === '/app/recordings' || from.startsWith('/app/recordings?')) ? from : '/app/recordings';
   const audioRef = useRef<HTMLAudioElement>(null);
   const [mediaError, setMediaError] = useState('');
+  const [activeSegmentId, setActiveSegmentId] = useState<string | null>(null);
   const [selectedSummaryId, setSelectedSummaryId] = useState<string | null>(null);
   const [hasRevisionPreview, setHasRevisionPreview] = useState(false);
   const [previewKey, setPreviewKey] = useState<ArtifactKey | null>(null);
@@ -90,12 +91,18 @@ function RecordingContent({ recordingId }: { recordingId: string }) {
   const uniqueSpeakers = new Set(segments.map(s => s.speaker)).size;
   const matched = new Set(segments.filter(s => s.voiceprint_id).map(s => s.speaker)).size;
 
+  function updatePlaybackPosition(seconds: number) {
+    const segment = segments.find(s => s.start_sec <= seconds && seconds < s.end_sec);
+    setActiveSegmentId(segment?.id ?? null);
+  }
+
   function seek(seconds: number) {
     const audio = audioRef.current;
     if (!audio) return;
     setMediaError('');
     try {
       audio.currentTime = seconds;
+      updatePlaybackPosition(seconds);
       audio.play().catch(() => setMediaError('播放未开始，可使用播放器重试。'));
     } catch { setMediaError('音频尚未就绪，加载后再定位。'); }
   }
@@ -117,11 +124,13 @@ function RecordingContent({ recordingId }: { recordingId: string }) {
     </div>
     <div className="record-layout">
       <div className="record-content">
-        <section className="record-audio" aria-label="录音播放">
-          <audio ref={audioRef} controls preload="metadata" src={recordingAudioUrl(recordingId)} onError={() => setMediaError('音频加载失败，可刷新页面重试。')} onPlaying={() => setMediaError('')} />
-          {mediaError && <p className="record-error" role="alert">{mediaError}</p>}
-        </section>
-        <nav className="record-anchors" aria-label="内容导航">{showSummary && <a href="#record-summary">会议纪要</a>}{segments.length > 0 && <a href="#record-transcript">逐字稿</a>}{showEmotion && <a href="#record-emotion">情绪分析</a>}</nav>
+        <div className="record-reading-tools">
+          <section className="record-audio" aria-label="录音播放">
+            <audio ref={audioRef} controls preload="metadata" src={recordingAudioUrl(recordingId)} onError={() => setMediaError('音频加载失败，可刷新页面重试。')} onPlaying={() => setMediaError('')} onTimeUpdate={e => updatePlaybackPosition(e.currentTarget.currentTime)} onSeeked={e => updatePlaybackPosition(e.currentTarget.currentTime)} />
+            {mediaError && <p className="record-error" role="alert">{mediaError}</p>}
+          </section>
+          <nav className="record-anchors" aria-label="内容导航">{showSummary && <a href="#record-summary">会议纪要</a>}{segments.length > 0 && <a href="#record-transcript">逐字稿</a>}{showEmotion && <a href="#record-emotion">情绪分析</a>}</nav>
+        </div>
         {showSummary && <section id="record-summary" className="record-section">
           <header className="record-section-head"><h2>会议纪要</h2>
             {summaries.length > 0 && <select aria-label="纪要版本" value={selectedSummary?.id ?? ''} onChange={e => setSelectedSummaryId(e.target.value === currentSummary?.id ? null : e.target.value)}>
@@ -139,7 +148,8 @@ function RecordingContent({ recordingId }: { recordingId: string }) {
         </section>}
         {segments.length > 0 && <section id="record-transcript" className="record-section">
           <header className="record-section-head"><h2>逐字稿 <span className="record-muted">{segments.length} 段</span></h2>{segments.length > 0 && <a className="record-link" href={exportTranscriptUrl(recordingId)} download>导出逐字稿</a>}</header>
-          {segments.length ? <ol className="record-transcript">{segments.map(seg => <li key={seg.id}>
+          <p className="record-muted transcript-hint">点击时间，定位并播放对应发言。</p>
+          {segments.length ? <ol className="record-transcript">{segments.map(seg => <li key={seg.id} aria-current={activeSegmentId === seg.id ? 'true' : undefined}>
             <div className="transcript-meta"><button className="transcript-time tnum" onClick={() => seek(seg.start_sec)} aria-label={'播放 ' + seg.start_label + ' 的发言'}>{seg.start_label}</button><span>{seg.speaker_name || '说话人 ' + seg.speaker}</span></div>
             <p>{seg.text}</p>
           </li>)}</ol> : <p className="record-muted">{processing ? '转写进行中，完成后自动显示。' : '还没有逐字稿。'}</p>}

@@ -226,7 +226,7 @@ export function AppShell() {
                   onClick={() => setMobileOpen(false)}
                   end={item.end}
                   className={({ isActive }) =>
-                    cn("nav-item", isActive && "is-active")
+                    cn("nav-item", (isActive || (item.to === "/app/recordings" && location.pathname.startsWith("/app/recordings/") && location.pathname !== "/app/recordings/new")) && "is-active")
                   }
                 >
                   <Icon name={item.icon} size={14} className="nav-item__icon" />
