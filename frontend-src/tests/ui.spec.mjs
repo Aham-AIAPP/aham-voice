@@ -38,18 +38,61 @@ test('当前正文、历史版本、真实文件下载和时间戳播放', async
   expect(f.unexpected).toEqual([]);expect(f.errors).toEqual([]);
 });
 
-test('纪要改写创建新版本并保留历史；只提交一次', async ({page}) => {
+test('AI 改写先预览；取消不生效，确认一次并保留旧版本', async ({page}) => {
   const f=await setup(page);
   await page.goto('/app/recordings/rec-0');
   await page.locator('.record-revise > summary').click();
   await page.getByLabel('纪要修改要求').fill('按议题整理');
-  await page.getByRole('button',{name:'按要求重写'}).click();
-  await expect(page.getByText('修改后纪要',{exact:true})).toBeVisible();
+  await page.getByRole('button',{name:'生成改写预览',exact:true}).click();
+  await expect(page.getByRole('heading',{name:'改写预览 · 待你确认'})).toBeFocused();
+  await expect(page.getByLabel('纪要版本',{exact:true})).toHaveValue('summary-2');
+  expect(f.requests.filter(r=>r.path.endsWith('/revise/apply'))).toHaveLength(0);
+  await page.getByRole('button',{name:'取消改写',exact:true}).click();
+  await expect(page.getByLabel('纪要修改要求')).toBeFocused();
+  await expect(page.getByText('修改后纪要',{exact:true})).toHaveCount(0);
+  await page.getByRole('button',{name:'生成改写预览',exact:true}).click();
+  await page.locator('.revision-preview > details > summary').click();
+  await expect(page.locator('.revision-preview details')).toContainText('确认试用范围');
+  await page.getByRole('button',{name:'确认应用改写',exact:true}).dblclick();
   await expect(page.getByLabel('纪要版本',{exact:true})).toHaveValue('summary-3');
   await page.getByLabel('纪要版本',{exact:true}).selectOption('summary-2');
   await expect(page.getByText('确认试用范围，保留原有数据与权限。')).toBeVisible();
-  expect(f.requests.filter(r=>r.path.endsWith('/summary/revise'))).toHaveLength(1);
-  expect(JSON.parse(f.requests.find(r=>r.path.endsWith('/summary/revise')).body)).toEqual({instruction:'按议题整理'});
+  expect(f.requests.filter(r=>r.path.endsWith('/revise/apply'))).toHaveLength(1);
+  expect(JSON.parse(f.requests.find(r=>r.path.endsWith('/revise/apply')).body)).toEqual({draft_id:'draft-1'});
+  expect(f.requests.filter(r=>r.path.endsWith('/summary/revise'))).toHaveLength(0);
+});
+
+test('改写确认失败保留预览，重试后生效', async ({page}) => {
+  const f=await setup(page);
+  await page.goto('/app/recordings/rec-0');
+  await page.locator('.record-revise > summary').click();
+  await page.getByLabel('纪要修改要求').fill('按议题整理');
+  await page.getByRole('button',{name:'生成改写预览',exact:true}).click();
+  f.state.apiError='/api/recordings/rec-0/summary/revise/apply';
+  await page.getByRole('button',{name:'确认应用改写',exact:true}).click();
+  await expect(page.getByText('测试请求失败，重试后继续。')).toBeVisible();
+  await expect(page.getByRole('heading',{name:'改写预览 · 待你确认'})).toBeVisible();
+  await expect(page.getByLabel('纪要版本',{exact:true})).toHaveValue('summary-2');
+  f.state.apiError='';
+  await page.getByRole('button',{name:'确认应用改写',exact:true}).click();
+  await expect(page.getByLabel('纪要版本',{exact:true})).toHaveValue('summary-3');
+});
+
+test('未生成内容的阶段隐藏；来源链接和快捷键帮助可用', async ({page}) => {
+  const f=await setup(page);
+  await page.goto('/app/recordings/rec-3');
+  await expect(page.locator('#record-summary,#record-transcript,#record-emotion')).toHaveCount(0);
+  await expect(page.getByRole('button',{name:'开始处理',exact:true})).toBeVisible();
+  await page.keyboard.press('?');
+  await expect(page.getByRole('dialog',{name:'键盘快捷键'})).toBeVisible();
+  await page.keyboard.press('Escape');
+  await page.goto('/app/recordings/rec-0');
+  await page.locator('#record-summary > .record-source').getByRole('link',{name:'查看逐字稿依据'}).click();
+  await expect(page).toHaveURL(/#record-transcript$/);
+  await page.locator('.record-revise > summary').click();
+  await page.getByLabel('纪要修改要求').fill('?');
+  await expect(page.getByRole('dialog',{name:'键盘快捷键'})).not.toBeVisible();
+  expect(f.unexpected).toEqual([]); expect(f.errors).toEqual([]);
 });
 
 test('纪要失败只重试纪要，并跟踪排队后的结果', async ({page}) => {
@@ -255,3 +298,22 @@ test('退出登录清除会话且返回受保护页面需要重新登录', async
   await expect(page).toHaveURL(/\/login$/);
   expect(f.errors).toEqual([]);
 });
+
+for (const width of [1440, 390]) for (const theme of ['light', 'dark']) {
+  test(`改写预览布局 ${width} ${theme}`, async ({page}, testInfo) => {
+    await setup(page);
+    await page.setViewportSize({width,height:900});
+    await page.addInitScript(value=>localStorage.setItem('voice.theme',value),theme);
+    await page.goto('/app/recordings/rec-0');
+    await page.locator('.record-revise > summary').click();
+    await page.getByLabel('纪要修改要求').fill('按议题整理，并列出负责人和下一步。');
+    await page.getByRole('button',{name:'生成改写预览',exact:true}).click();
+    await expect(page.getByRole('heading',{name:'改写预览 · 待你确认'})).toBeVisible();
+    await expect(page.locator('#main .btn--primary:visible')).toHaveCount(1);
+    await expect(page.locator('#main .btn--primary:visible')).toHaveText('确认应用改写');
+    await page.locator('.revision-preview > details > summary').click();
+    await expect(page.locator('.revision-preview')).toContainText('确认试用范围');
+    expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+    await page.screenshot({path:testInfo.outputPath('revision-preview.png'),fullPage:true,animations:'disabled'});
+  });
+}

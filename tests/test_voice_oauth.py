@@ -81,6 +81,10 @@ def test_http_discovery_mcp_boundary_and_scopes(auth):
         r=client.post('/voice/mcp',headers=headers,json=rpc('initialize',{'protocolVersion':'2025-11-25','capabilities':{},'clientInfo':{'name':'test','version':'1'}}))
         assert r.status_code==200,r.text
         tools=client.post('/voice/mcp',headers=headers,json=rpc('tools/list')).json()['result']['tools'];assert len(tools)==11
+        summary_tool=next(t for t in tools if t['name']=='voice_get_summary')
+        assert summary_tool['annotations']['readOnlyHint'] is True
+        assert 'evidence' in summary_tool['description'] and '待确认' in summary_tool['description']
+        assert 'recording_id' in summary_tool['inputSchema']['required']
         r=client.post('/voice/mcp',headers=headers,json=rpc('tools/call',{'name':'voice_connection_status','arguments':{}})).json()
         assert 'Test Alice' in json.dumps(r)
         r=client.post('/voice/mcp',headers=headers,json=rpc('tools/call',{'name':'voice_sync_now','arguments':{}})).json()

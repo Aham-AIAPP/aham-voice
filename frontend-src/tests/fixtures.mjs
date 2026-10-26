@@ -28,7 +28,7 @@ export async function setup(page, options = {}) {
     { id: 'vp-1', name: '林悦', owner_id: user.id, team_id: 'test-team', scope: 'personal', note: '', threshold: 0.5, active: 1, created_at: '2026-10-26 09:00:00' },
     { id: 'vp-other', name: '其他成员', owner_id: 'other-user', team_id: 'other-team', scope: 'global', note: '', threshold: 0.5, active: 1, created_at: '2026-10-26 09:00:00' },
   ];
-  let emotion = null, queuedReads = 0;
+  let emotion = null, queuedReads = 0, draft = null;
   // Short valid WAV enables real browser decoding/seek without any recording data.
   const wav = Buffer.alloc(44 + 8000 * 2 * 4);
   wav.write('RIFF'); wav.writeUInt32LE(wav.length - 8,4); wav.write('WAVEfmt ',8); wav.writeUInt32LE(16,16); wav.writeUInt16LE(1,20); wav.writeUInt16LE(1,22); wav.writeUInt32LE(8000,24); wav.writeUInt32LE(16000,28); wav.writeUInt16LE(2,32); wav.writeUInt16LE(16,34); wav.write('data',36); wav.writeUInt32LE(wav.length - 44,40);
@@ -55,9 +55,14 @@ export async function setup(page, options = {}) {
     if (pathname.endsWith('/audio')) return route.fulfill({status:200,contentType:'audio/wav',body:wav});
     if (pathname.includes('/export/')) return route.continue();
     if (pathname.endsWith('/speaker-candidates')) return json(candidates);
-    if (pathname.endsWith('/summary/revise')) {
+    if (pathname.endsWith('/summary/revise/preview')) {
       const instruction = req.postDataJSON().instruction;
-      summaries = [{ ...summaries[0], id:'summary-3',version:3,content:'# 修改后纪要\n\n' + instruction, instruction, is_current:1}, ...summaries.map(s=>({...s,is_current:0}))];
+      draft = {draft_id:'draft-1',recording_id:'rec-0',base_summary_id:summaries[0].id,base_content:summaries[0].content,content:'# 修改后纪要\n\n'+instruction,model:'test-model',status:'awaiting_confirmation'};
+      return json(draft);
+    }
+    if (pathname.endsWith('/summary/revise/apply')) {
+      const instruction = '按议题整理';
+      summaries = [{ ...summaries[0], id:'summary-3',version:3,content:draft.content, instruction, is_current:1}, ...summaries.map(s=>({...s,is_current:0}))];
       return json({summary_id:'summary-3',version:3});
     }
     if (pathname.endsWith('/summarize')) { queuedReads = 1; return json({recording_id:'rec-1',job_id:'job-summary',status:'queued'}); }
@@ -77,7 +82,8 @@ export async function setup(page, options = {}) {
       const rec = recordings.find(r=>r.id===pathname.split('/').at(-1));
       if (!rec) return json({detail:'录音不存在'},404);
       if (queuedReads && rec.id === 'rec-1') { queuedReads++; if(queuedReads > 2) rec.summary_status='done'; }
-      return json({ recording:rec, segments, summary:summaries[0], summaries, tasks:[], hotword_package:{asr_terms_count:2}, emotion_analysis:emotion, outputs:[] });
+      const empty = rec.asr_status !== 'done';
+      return json({ recording:rec, segments:empty ? [] : segments, summary:empty ? null : summaries[0], summaries:empty ? [] : summaries, tasks:[], hotword_package:{asr_terms_count:2}, emotion_analysis:emotion, outputs:[] });
     }
     if (pathname === '/api/hotwords/words') return json(words);
     if (pathname === '/api/hotwords' && method === 'PUT') { words=req.postDataJSON().words; return json({ok:true,count:words.length,words}); }

@@ -279,3 +279,15 @@ button, input, select, textarea { font-family: inherit; }
   .page-body.page--landing .u-card-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
   .item-list > li { flex-wrap: wrap; }
 }
+
+/* AI changes remain reviewable until the user applies this exact preview. */
+.revision-preview { padding-block: var(--wb-s4); }
+.revision-preview h3 { font-size: var(--wb-text-sm); margin: 0 0 var(--wb-s3); }
+.revision-draft { margin-block: var(--wb-s4); }
+.record-source a { color: inherit; text-decoration: underline; text-underline-offset: 3px; }
+.record-anchors:empty { display: none; }
+.shortcuts-help { padding: var(--wb-s6); }
+.shortcuts-help h2 { font-size: var(--wb-title); }
+.shortcuts-help dl { margin-block: var(--wb-s5); }
+.shortcuts-help dl div { display: flex; gap: var(--wb-s4); justify-content: space-between; margin-block: var(--wb-s3); }
+.shortcuts-help dd { margin: 0; white-space: nowrap; }

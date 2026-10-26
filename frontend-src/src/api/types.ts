@@ -92,6 +92,19 @@ export interface Summary {
   base_summary_id: string | null;
   is_current: number;
   content_length?: number;
+  evidence?: { kind: "transcript"; recording_id: string; title: string };
+}
+
+export interface SummaryRevisionDraft {
+  draft_id: string;
+  recording_id: string;
+  base_summary_id: string;
+  base_content: string;
+  content: string;
+  model: string;
+  created_at: string;
+  status: "awaiting_confirmation";
+  evidence: { kind: "transcript"; recording_id: string; title: string };
 }
 
 export interface RecordingTask {

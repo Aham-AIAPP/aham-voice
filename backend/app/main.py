@@ -398,6 +398,19 @@ def ensure_schema() -> None:
                 model text not null,
                 created_at text not null
             );
+            create table if not exists summary_revision_drafts (
+                id text primary key,
+                recording_id text not null,
+                user_id text not null,
+                base_summary_id text not null,
+                transcript_hash text not null,
+                instruction text not null,
+                content text not null,
+                model text not null,
+                created_at text not null,
+                expires_at real not null,
+                applied_summary_id text
+            );
             create table if not exists emotion_analyses (
                 id text primary key,
                 recording_id text not null,
@@ -2441,6 +2454,87 @@ async def summarize_recording(recording_id: str, user: dict[str, Any]) -> dict[s
         raise HTTPException(status_code=500, detail=f"summary generation failed: {exc}") from exc
 
 
+def summary_payload(rec: dict[str, Any], summary: dict[str, Any] | None) -> dict[str, Any] | None:
+    """One additive evidence contract for browser and MCP; drafts are separate."""
+    if summary is None:
+        return None
+    return {**summary, "evidence": {"kind": "transcript", "recording_id": rec["id"], "title": rec["title"]}}
+
+
+def revision_pipeline_busy(conn: sqlite3.Connection, rec: dict[str, Any]) -> bool:
+    # A queued summary_only job may still leave summary_status='done'.
+    return rec["asr_status"] != "done" or rec["summary_status"] in ("running", "queued") or bool(conn.execute(
+        "select 1 from voice_jobs where recording_id=? and status in ('queued','running','retry','blocked','conflict') limit 1",
+        (rec["id"],),
+    ).fetchone())
+
+
+async def preview_summary_revision(recording_id: str, instruction: str, user: dict[str, Any]) -> dict[str, Any]:
+    instruction = instruction.strip()
+    if not instruction:
+        raise HTTPException(400, "请填写纪要修改要求")
+    with db() as conn:
+        rec = can_access_recording(conn, recording_id, user)
+        if revision_pipeline_busy(conn, rec):
+            raise HTTPException(409, "请等待当前处理完成")
+        base = rowdict(conn.execute("select * from summaries where recording_id=? order by is_current desc,version desc,created_at desc limit 1", (recording_id,)).fetchone())
+        text = transcript_text(conn, recording_id)
+        if not base or not base["content"].strip() or not text.strip():
+            raise HTTPException(409, "需要有效的纪要和逐字稿才能生成改写预览")
+    # Generation never replaces content or changes the recording's status.
+    try:
+        content, model = await call_deepseek_revision(instruction, base["content"], text, rec)
+        if not content.strip():
+            raise ValueError("改写结果为空，请重试")
+    except Exception as exc:
+        raise HTTPException(502, "生成改写预览失败，请重试") from exc
+    draft_id, created_at = str(uuid.uuid4()), now()
+    with db() as conn:
+        can_access_recording(conn, recording_id, user)
+        conn.execute("delete from summary_revision_drafts where expires_at<? and applied_summary_id is null", (time.time(),))
+        conn.execute("""insert into summary_revision_drafts
+            (id,recording_id,user_id,base_summary_id,transcript_hash,instruction,content,model,created_at,expires_at)
+            values(?,?,?,?,?,?,?,?,?,?)""", (draft_id, recording_id, user["id"], base["id"], hashlib.sha256(text.encode()).hexdigest(), instruction, content, model, created_at, time.time() + 86400))
+    return {"draft_id": draft_id, "recording_id": recording_id, "base_summary_id": base["id"],
+            "base_content": base["content"], "content": content, "model": model, "created_at": created_at,
+            "status": "awaiting_confirmation", "evidence": {"kind": "transcript", "recording_id": recording_id, "title": rec["title"]}}
+
+
+def apply_summary_revision(recording_id: str, draft_id: str, user: dict[str, Any]) -> dict[str, Any]:
+    with db() as conn:
+        # Serialize confirmation with concurrent confirmations and worker writes.
+        conn.execute("begin immediate")
+        rec = can_access_recording(conn, recording_id, user)
+        draft = rowdict(conn.execute("select * from summary_revision_drafts where id=? and recording_id=? and user_id=?", (draft_id, recording_id, user["id"])).fetchone())
+        if not draft:
+            raise HTTPException(404, "改写预览不存在，请重新生成")
+        if draft["applied_summary_id"]:
+            applied = conn.execute("select id,version,model from summaries where id=? and recording_id=?", (draft["applied_summary_id"], recording_id)).fetchone()
+            if not applied:
+                raise HTTPException(409, "原纪要已重新处理，请刷新页面")
+            return {"recording_id": recording_id, "summary_id": applied["id"], "version": applied["version"], "model": applied["model"]}
+        if draft["expires_at"] < time.time():
+            raise HTTPException(409, "改写预览已过期，请重新生成")
+        if revision_pipeline_busy(conn, rec):
+            raise HTTPException(409, "录音正在处理，请等待完成后重新生成预览")
+        current = conn.execute("select id from summaries where recording_id=? order by is_current desc,version desc,created_at desc limit 1", (recording_id,)).fetchone()
+        text_hash = hashlib.sha256(transcript_text(conn, recording_id).encode()).hexdigest()
+        if not current or current["id"] != draft["base_summary_id"] or text_hash != draft["transcript_hash"]:
+            raise HTTPException(409, "纪要或逐字稿已有更新，请重新生成预览后确认")
+        summary_id, version, stamp = str(uuid.uuid4()), next_summary_version(conn, recording_id), now()
+        conn.execute("update summaries set is_current=0 where recording_id=?", (recording_id,))
+        conn.execute("""insert into summaries(id,recording_id,content,model,created_at,version,instruction,base_summary_id,is_current)
+            values(?,?,?,?,?,?,?,?,1)""", (summary_id, recording_id, draft["content"], draft["model"], stamp, version, draft["instruction"], draft["base_summary_id"]))
+        conn.execute("update summary_revision_drafts set applied_summary_id=? where id=?", (summary_id, draft_id))
+        conn.execute("update recordings set summary_status='done',updated_at=? where id=?", (stamp, recording_id))
+        # The processing helpers commit internally. Insert this completed event
+        # directly so the version, draft marker and audit share one transaction.
+        conn.execute("""insert into tasks(id,recording_id,recording_title,step,status,progress,created_at,updated_at,started_at,finished_at)
+            values(?,?,?,?,'done',100,?,?,?,?)""", (str(uuid.uuid4()), recording_id, rec["title"], "确认应用纪要改写", stamp, stamp, stamp, stamp))
+        audit(conn, user, "summary", f"确认应用纪要改写：{rec['title']}，版本 v{version}。")
+    return {"recording_id": recording_id, "summary_id": summary_id, "version": version, "model": draft["model"]}
+
+
 async def revise_summary(recording_id: str, instruction: str, user: dict[str, Any]) -> dict[str, Any]:
     instruction = (instruction or "").strip()
     if not instruction:
@@ -3864,8 +3958,8 @@ def recording_detail(recording_id: str, user: dict[str, Any] = Depends(current_u
         return {
             "recording": rec_payload,
             "segments": segments,
-            "summary": summary,
-            "summaries": summaries,
+            "summary": summary_payload(rec, summary),
+            "summaries": [summary_payload(rec, item) for item in summaries],
             "emotion_analysis": emotion,
             "tasks": tasks,
             "outputs": outputs,
@@ -3918,7 +4012,18 @@ async def summarize_api(recording_id: str, user: dict[str, Any] = Depends(curren
 
 @app.post("/api/recordings/{recording_id}/summary/revise")
 async def revise_summary_api(recording_id: str, payload: dict[str, str], user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+    # Compatibility for older clients. The Aham UI uses preview/apply below.
     return await revise_summary(recording_id, payload.get("instruction") or "", user)
+
+
+@app.post("/api/recordings/{recording_id}/summary/revise/preview")
+async def preview_revision_api(recording_id: str, payload: dict[str, str], user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+    return await preview_summary_revision(recording_id, payload.get("instruction") or "", user)
+
+
+@app.post("/api/recordings/{recording_id}/summary/revise/apply")
+def apply_revision_api(recording_id: str, payload: dict[str, str], user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+    return apply_summary_revision(recording_id, payload.get("draft_id") or "", user)
 
 
 @app.get("/api/recordings/{recording_id}/export/transcript.md")

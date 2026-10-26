@@ -134,6 +134,7 @@ export function AppShell() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [theme, setTheme] = useState(() => document.documentElement.classList.contains("dark") ? "dark" : "light");
   const sidebarRef = useFocusTrap<HTMLElement>(narrow && mobileOpen);
+  const shortcutsRef = useRef<HTMLDialogElement>(null);
   const paletteRef = useRef<HTMLDialogElement>(null);
   const [commands, setCommands] = useState<Array<{ label: string; run: () => void }>>([]);
   const [commandQuery, setCommandQuery] = useState("");
@@ -152,6 +153,7 @@ export function AppShell() {
       } })).filter(command => command.label);
     setCommands([
       ...sections.flatMap(section => section.items.map(item => ({ label: "前往 " + item.label, run: () => navigate(item.to) }))),
+      { label: "键盘快捷键", run: () => shortcutsRef.current?.showModal() },
       { label: "切换深色 / 浅色主题", run: toggleTheme },
       { label: "展开 / 收起导航", run: toggleSidebar },
       ...pageCommands,
@@ -178,6 +180,11 @@ export function AppShell() {
       if (document.querySelector('[aria-modal="true"], dialog[open]')) return;
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "b") { event.preventDefault(); toggleSidebar(); }
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") { event.preventDefault(); openPalette(); }
+      const target = event.target as HTMLElement;
+      const editing = target.closest('input, textarea, select, [contenteditable="true"]');
+      if (event.key === "?" && !editing && !event.ctrlKey && !event.metaKey && !event.altKey) {
+        event.preventDefault(); shortcutsRef.current?.showModal();
+      }
       if (event.key === "Escape") { setAccountOpen(false); setMobileOpen(false); }
     }
     document.addEventListener("keydown", onKey);
@@ -303,6 +310,13 @@ export function AppShell() {
       <main className="app-shell__body" id="main">
         <Outlet />
       </main>
+      <dialog className="command-palette" ref={shortcutsRef} aria-label="键盘快捷键" onClick={event => { if (event.target === event.currentTarget) shortcutsRef.current?.close(); }}>
+        <div className="command-inner shortcuts-help">
+          <h2>键盘快捷键</h2>
+          <dl><div><dt>搜索页面与操作</dt><dd>⌘ / Ctrl + K</dd></div><div><dt>展开或收起导航</dt><dd>⌘ / Ctrl + B</dd></div><div><dt>查看快捷键</dt><dd>?</dd></div><div><dt>切换焦点</dt><dd>Tab / Shift + Tab</dd></div><div><dt>关闭弹层</dt><dd>Esc</dd></div></dl>
+          <button className="btn" onClick={() => shortcutsRef.current?.close()}>关闭快捷键</button>
+        </div>
+      </dialog>
       <dialog className="command-palette" ref={paletteRef} aria-label="搜索页面与操作" onClick={event => { if (event.target === event.currentTarget) paletteRef.current?.close(); }}>
         <div className="command-inner">
           <div className="command-search"><input aria-label="搜索命令" placeholder="搜索页面与当前页操作" value={commandQuery} onChange={e => setCommandQuery(e.target.value)} onKeyDown={e => {

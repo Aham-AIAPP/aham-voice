@@ -523,8 +523,8 @@ def read_action(action,args,user):
             rows=c.execute('select id,start_sec,end_sec,start_label,speaker,speaker_name,text from transcript_segments where recording_id=? order by start_sec,id limit ? offset ?',(rid,limit+1,offset)).fetchall()
             return {'recording_id':rid,'title':rec['title'],'status':rec['asr_status'],'segments':[dict(r) for r in rows[:limit]],'has_more':len(rows)>limit,'next_offset':offset+limit if len(rows)>limit else None}
         if action=='summary':
-            row=c.execute('select content,model,created_at,version from summaries where recording_id=? order by is_current desc,version desc,created_at desc limit 1',(rid,)).fetchone()
-            return {'recording_id':rid,'title':rec['title'],'status':rec['summary_status'],'summary':dict(row) if row else None}
+            row=c.execute('select id,recording_id,content,model,created_at,version,base_summary_id,is_current from summaries where recording_id=? order by is_current desc,version desc,created_at desc limit 1',(rid,)).fetchone()
+            return {'recording_id':rid,'title':rec['title'],'status':rec['summary_status'],'summary':m.summary_payload(rec,dict(row) if row else None)}
         if action=='detail':
             src=c.execute('select source_uuid,source_url,source_title,generated_title,remote_applied_title,title_locked from recording_sources where recording_id=?',(rid,)).fetchone()
             history=[dict(r) for r in c.execute('select old_title,new_title,origin,created_at from voice_title_history where recording_id=? order by created_at desc',(rid,))]

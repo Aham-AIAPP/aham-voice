@@ -32,6 +32,7 @@ function RecordingContent({ recordingId }: { recordingId: string }) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const [mediaError, setMediaError] = useState('');
   const [selectedSummaryId, setSelectedSummaryId] = useState<string | null>(null);
+  const [hasRevisionPreview, setHasRevisionPreview] = useState(false);
   const [previewKey, setPreviewKey] = useState<ArtifactKey | null>(null);
   const [confirmReprocess, setConfirmReprocess] = useState(false);
   const [requestedSnapshot, setRequestedSnapshot] = useState<string | null>(null);
@@ -65,6 +66,8 @@ function RecordingContent({ recordingId }: { recordingId: string }) {
   const currentSummary = summaries.find(s => s.is_current) ?? summaries[0] ?? null;
   const selectedSummary = summaries.find(s => s.id === selectedSummaryId) ?? currentSummary;
   const hasSummary = !!currentSummary?.content?.trim();
+  const showSummary = summaries.some(s => s.content?.trim());
+  const showEmotion = !!emotion?.content?.trim() || rec.asr_status === 'done';
   const hasSelectedContent = !!selectedSummary?.content?.trim();
   const isCurrent = selectedSummary?.id === currentSummary?.id;
   const snapshot = JSON.stringify([rec.asr_status, rec.summary_status, currentSummary?.id, tasks.map(t => [t.id, t.status, t.updated_at])]);
@@ -77,12 +80,12 @@ function RecordingContent({ recordingId }: { recordingId: string }) {
   const failure = [...tasks].reverse().find(t => t.status === 'failed');
   const currentTask = [...tasks].reverse().find(t => t.status === 'running' || t.status === 'queued');
   const summaryMissing = rec.summary_status === 'done' && !hasSummary;
-  const description = waiting ? '任务已提交，等待工作进程开始。页面会自动更新。'
-    : processing ? (currentTask ? currentTask.step + ' · ' + currentTask.elapsed_label : '正在处理录音，页面会自动更新。')
+  const description = waiting ? '等待录音服务开始处理，页面会自动更新。'
+    : processing ? (currentTask ? '录音服务正在执行：' + currentTask.step + ' · ' + currentTask.elapsed_label : '录音服务正在处理，页面会自动更新。')
     : rec.asr_status === 'failed' ? '转写失败，可以重试录音处理。'
     : rec.summary_status === 'failed' ? '纪要生成失败，已有逐字稿和历史版本仍可查看。'
     : summaryMissing ? '纪要状态已完成，但正文为空。需要重新生成纪要。'
-    : hasSummary ? '纪要已生成，可阅读、修改或导出。'
+    : hasSummary ? '纪要已生成，等待你核对；可对照逐字稿、修改或导出。'
     : rec.asr_status === 'done' ? '转写已完成，可以生成会议纪要。' : '录音已保存，可以开始转写和生成纪要。';
   const uniqueSpeakers = new Set(segments.map(s => s.speaker)).size;
   const matched = new Set(segments.filter(s => s.voiceprint_id).map(s => s.speaker)).size;
@@ -105,7 +108,7 @@ function RecordingContent({ recordingId }: { recordingId: string }) {
         {pipelineBusy ? <Button variant="primary" disabled>{waiting ? '等待处理' : '处理中'}</Button>
           : needsSummary ? <Button variant="primary" onClick={() => action.mutate('summary')}>{rec.summary_status === 'failed' || summaryMissing ? '重试纪要' : '生成纪要'}</Button>
           : rec.asr_status !== 'done' ? <Button variant="primary" onClick={() => action.mutate('process')}>{rec.asr_status === 'failed' ? '重试转写' : '开始处理'}</Button>
-          : hasSelectedContent ? <a className="btn btn--primary" href={exportSummaryVersionUrl(recordingId, selectedSummary!.id)} download>导出纪要{!isCurrent ? ' v' + selectedSummary!.version : ''}</a> : null}
+          : hasSelectedContent ? <a className={'btn ' + (hasRevisionPreview ? 'btn--secondary' : 'btn--primary')} href={exportSummaryVersionUrl(recordingId, selectedSummary!.id)} download>导出纪要{!isCurrent ? ' v' + selectedSummary!.version : ''}</a> : null}
       </div>
       <div className="record-subtitle"><Status tone={summaryMissing ? 'rust' : status.tone}>{summaryMissing ? '纪要正文缺失' : status.label}</Status><span className="tnum">{rec.duration_label}</span><span>{segments.length} 段发言 · {uniqueSpeakers} 位说话人</span></div>
       <div className="record-next" role="status">{description}{processing && currentTask && <progress value={currentTask.progress} max={100} aria-label="当前处理进度" />}</div>
@@ -118,37 +121,37 @@ function RecordingContent({ recordingId }: { recordingId: string }) {
           <audio ref={audioRef} controls preload="metadata" src={recordingAudioUrl(recordingId)} onError={() => setMediaError('音频加载失败，可刷新页面重试。')} onPlaying={() => setMediaError('')} />
           {mediaError && <p className="record-error" role="alert">{mediaError}</p>}
         </section>
-        <nav className="record-anchors" aria-label="内容导航"><a href="#record-summary">会议纪要</a><a href="#record-transcript">逐字稿</a><a href="#record-emotion">情绪分析</a></nav>
-        <section id="record-summary" className="record-section">
+        <nav className="record-anchors" aria-label="内容导航">{showSummary && <a href="#record-summary">会议纪要</a>}{segments.length > 0 && <a href="#record-transcript">逐字稿</a>}{showEmotion && <a href="#record-emotion">情绪分析</a>}</nav>
+        {showSummary && <section id="record-summary" className="record-section">
           <header className="record-section-head"><h2>会议纪要</h2>
             {summaries.length > 0 && <select aria-label="纪要版本" value={selectedSummary?.id ?? ''} onChange={e => setSelectedSummaryId(e.target.value === currentSummary?.id ? null : e.target.value)}>
               {summaries.map(s => <option key={s.id} value={s.id}>v{s.version}{s.id === currentSummary?.id ? ' · 当前版本' : ' · 历史版本'}</option>)}
             </select>}
           </header>
-          {selectedSummary && <p className="record-source">AI 生成 · {selectedSummary.model} · {selectedSummary.created_at}{!isCurrent && <Button size="sm" onClick={() => setSelectedSummaryId(null)}>返回当前版本</Button>}</p>}
+          {selectedSummary && <p className="record-source">AI 生成 · {selectedSummary.model} · {selectedSummary.created_at}{segments.length > 0 && <> · <a href="#record-transcript">查看逐字稿依据</a></>}{!isCurrent && <Button size="sm" onClick={() => setSelectedSummaryId(null)}>返回当前版本</Button>}</p>}
           {(pipelineBusy || needsSummary || rec.asr_status !== 'done') && hasSelectedContent && <a className="record-link" href={exportSummaryVersionUrl(recordingId, selectedSummary!.id)} download>下载此版本</a>}
           {hasSelectedContent ? <article className="markdown record-prose"><ReactMarkdown remarkPlugins={[remarkGfm]}>{selectedSummary!.content}</ReactMarkdown></article>
             : <p className="record-muted">{pipelineBusy ? '纪要处理中，完成后自动显示。' : '还没有可阅读的纪要正文。'}</p>}
           {hasSummary && isCurrent && <details className="record-revise"><summary>修改纪要</summary>
-            <ReviseComposer recordingId={recordingId} disabled={pipelineBusy || rec.asr_status !== 'done'} disabledReason={pipelineBusy ? '处理完成后可以修改纪要' : '转写完成后可以修改纪要'} />
+            <ReviseComposer recordingId={recordingId} currentSummaryId={currentSummary!.id} onPreviewChange={setHasRevisionPreview} disabled={pipelineBusy || rec.asr_status !== 'done'} disabledReason={pipelineBusy ? '处理完成后可以修改纪要' : '转写完成后可以修改纪要'} />
           </details>}
           {!isCurrent && hasSelectedContent && <a className="record-link" href={exportSummaryVersionUrl(recordingId, selectedSummary!.id)} download>下载此历史版本</a>}
-        </section>
-        <section id="record-transcript" className="record-section">
+        </section>}
+        {segments.length > 0 && <section id="record-transcript" className="record-section">
           <header className="record-section-head"><h2>逐字稿 <span className="record-muted">{segments.length} 段</span></h2>{segments.length > 0 && <a className="record-link" href={exportTranscriptUrl(recordingId)} download>导出逐字稿</a>}</header>
           {segments.length ? <ol className="record-transcript">{segments.map(seg => <li key={seg.id}>
             <div className="transcript-meta"><button className="transcript-time tnum" onClick={() => seek(seg.start_sec)} aria-label={'播放 ' + seg.start_label + ' 的发言'}>{seg.start_label}</button><span>{seg.speaker_name || '说话人 ' + seg.speaker}</span></div>
             <p>{seg.text}</p>
           </li>)}</ol> : <p className="record-muted">{processing ? '转写进行中，完成后自动显示。' : '还没有逐字稿。'}</p>}
-        </section>
-        <section id="record-emotion" className="record-section">
+        </section>}
+        {showEmotion && <section id="record-emotion" className="record-section">
           <header className="record-section-head"><h2>对话情绪分析</h2>{emotion?.content?.trim() && <a className="record-link" href={exportEmotionUrl(recordingId)} download>导出分析</a>}</header>
-          {emotion?.content?.trim() ? <details className="record-fold"><summary>查看分析 · v{emotion.version}</summary><article className="markdown record-prose"><ReactMarkdown remarkPlugins={[remarkGfm]}>{emotion.content}</ReactMarkdown></article></details> : <>
+          {emotion?.content?.trim() ? <details className="record-fold"><summary>查看分析 · v{emotion.version}</summary><p className="record-source">AI 生成 · {emotion.model} · <a href="#record-transcript">查看逐字稿依据</a></p><article className="markdown record-prose"><ReactMarkdown remarkPlugins={[remarkGfm]}>{emotion.content}</ReactMarkdown></article></details> : <>
             <p className="record-muted">按需分析说话情绪、客户意向与异议。</p>
             <Button variant="secondary" disabled={rec.asr_status !== 'done' || pipelineBusy || emotionRunning} loading={emotionMut.isPending} onClick={() => emotionMut.mutate()}>{emotionRunning ? '正在分析' : '生成情绪分析'}</Button>
           </>}
           {emotionMut.isError && <Diag code="REC_E_EMOTION">{readApiError(emotionMut.error)}</Diag>}
-        </section>
+        </section>}
         <details className="record-fold record-history"><summary>处理与修改记录 <span>{tasks.length} 个任务 · {summaries.length} 个纪要版本 · {rec.owner_name} · {rec.updated_at}</span></summary>
           <Timeline recording={rec} tasks={tasks} summaries={summaries} segments={segments} emotion={emotion}
             onPreviewSummary={summaryId => setPreviewKey('summary:' + summaryId)}
@@ -159,7 +162,7 @@ function RecordingContent({ recordingId }: { recordingId: string }) {
       <aside className="record-properties" aria-label="录音属性">
         <h2>录音属性</h2>
         <dl>
-          <div><dt>负责人</dt><dd><Avatar name={rec.owner_name} size="sm" />{rec.owner_name || '未指定'}</dd></div>
+          <div><dt>所属成员</dt><dd><Avatar name={rec.owner_name} size="sm" />{rec.owner_name || '未指定'}</dd></div>
           <div><dt>会议类型</dt><dd>{rec.meeting_type || '未选择'}</dd></div>
           <div><dt>客户 / 项目</dt><dd>{rec.tag || '未填写'}</dd></div>
           <div><dt>原始文件</dt><dd>{rec.filename}</dd></div>
@@ -168,7 +171,7 @@ function RecordingContent({ recordingId }: { recordingId: string }) {
           <div><dt>热词</dt><dd>{pkg?.asr_terms_count ? '已启用 ' + pkg.asr_terms_count + ' 条' : '未启用'}</dd></div>
           <div><dt>声纹匹配</dt><dd>{uniqueSpeakers ? matched + ' / ' + uniqueSpeakers + ' 位' : '等待转写'}</dd></div>
         </dl>
-        <SpeakersCard recordingId={recordingId} asrStatus={rec.asr_status} />
+        {segments.length > 0 && <SpeakersCard recordingId={recordingId} asrStatus={rec.asr_status} />}
         <details className="record-fold record-advanced"><summary>处理操作</summary>
           <p className="record-muted">重新处理会重新转写并生成纪要，已有的说话人命名可能需要重新核对。</p>
           <Button variant="secondary" disabled={pipelineBusy} onClick={() => setConfirmReprocess(true)}>重新处理整条录音</Button>

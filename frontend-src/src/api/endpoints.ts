@@ -10,6 +10,7 @@ import type {
   RoleMapping,
   Settings,
   SpeakerCandidate,
+  SummaryRevisionDraft,
   SystemStatus,
   Team,
   User,
@@ -105,8 +106,13 @@ export async function summarizeRecording(id: string): Promise<{ recording_id: st
   return data;
 }
 
-export async function reviseSummary(id: string, instruction: string): Promise<{ recording_id: string; model: string; summary_id: string; version: number }> {
-  const { data } = await api.post(`/recordings/${id}/summary/revise`, { instruction });
+export async function previewSummaryRevision(id: string, instruction: string): Promise<SummaryRevisionDraft> {
+  const { data } = await api.post(`/recordings/${id}/summary/revise/preview`, { instruction });
+  return data;
+}
+
+export async function applySummaryRevision(id: string, draftId: string): Promise<{ recording_id: string; model: string; summary_id: string; version: number }> {
+  const { data } = await api.post(`/recordings/${id}/summary/revise/apply`, { draft_id: draftId });
   return data;
 }
 

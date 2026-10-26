@@ -154,7 +154,7 @@ def create_app(auth,backend):
 
     @m.tool(annotations=read)
     async def voice_get_summary(recording_id:str)->dict:
-        """读取本地保存的最新会议纪要及版本，不会触发重新生成。"""
+        """读取当前已生效的会议纪要，不包含网页待确认的改写预览，也不触发生成。summary 含 id、version、base_summary_id、is_current、content、model、created_at 和 evidence（kind=transcript、recording_id、title）。AI 生成内容需核对；用 evidence.recording_id 调用 voice_get_transcript 查看逐字稿依据，引用时注明录音标题和时间戳。"""
         return await call('summary',{'recording_id':recording_id})
 
     @m.tool(annotations=read)
