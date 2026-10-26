@@ -3,6 +3,16 @@
 > **内部版** · 销售 / 项目会议录音处理：本地转写 → DeepSeek 纪要与情绪分析
 > Python FastAPI · FunASR · 说话人分离 · 前端 React 19 + Vite + Tailwind v4（Aham 设计系统）
 
+## 当前主线 · Aham UI 9.1 网页版
+
+`main` 已统一到经过验证的多用户网页版，包含录音库与纪要阅读精修、AI 改写预览后确认、钉钉同步及 OAuth MCP。界面和预构建资源对应 `ui/aham-9.1-content` 的 `82df197`，应用逻辑与该版本一致。
+
+- [界面截图与精修说明](docs/ui-9.1-refinement.md)
+- [前端运行、测试与设计基线](frontend-src/README.md)
+- [钉钉同步与 MCP 接入](docs/voice-dingtalk-mcp.md)
+
+旧单机桌面版保留在 [archive/desktop-main-20261026](https://github.com/Aham-AIAPP/aham-voice/tree/archive/desktop-main-20261026)（`49d6f30`），已有安装包对应旧桌面版。当前主线按下文的网页版部署说明运行；首次部署须包含配套的后端、MCP 和前端资源。两套提交历史均保留，原 MIT 许可继续保留。
+
 ## 它做什么
 
 1. 本机跑 FunASR + 说话人分离，把录音转成带说话人的逐字稿；
