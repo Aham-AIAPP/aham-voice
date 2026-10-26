@@ -28,6 +28,8 @@
 
 /* 原子工具类 —— 最后导入，确保同属性下盖过组件类（复刻原内联 style 的优先级）。 */
 @import "./utilities.css";
+@import "./aham/tokens.css";
+@import "./aham-adapter.css";
 
 /* App-shell viewport: the body holds the grid, full height, no scroll on the
    root — the body region inside .app-shell handles its own scrolling. */

@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import { cn } from "@/utils/cn";
 import { initials } from "@/utils/format";
 
@@ -15,12 +16,11 @@ export function Avatar({
   size?: AvatarSize;
   className?: string;
 }) {
-  const dimension =
-    size === "xs" ? 20 : size === "sm" ? 24 : size === "md" ? 32 : size === "lg" ? 40 : 56;
+  const category = Array.from(name ?? "").reduce((sum, char) => sum + char.codePointAt(0)!, 0) % 6 + 1;
   return (
     <span
       className={cn("avatar", `avatar--${size}`, className)}
-      style={{ width: dimension, height: dimension }}
+      style={{ "--avatar-color": `var(--wb-cat-${category})` } as CSSProperties}
       aria-hidden
     >
       {initials(name)}

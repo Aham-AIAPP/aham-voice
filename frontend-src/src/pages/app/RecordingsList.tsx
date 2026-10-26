@@ -1,198 +1,105 @@
-import { useMemo, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
-import { fetchRecordings } from "@/api/endpoints";
-import { PageHead } from "@/components/PageHead";
-import { Button } from "@/components/Button";
-import { Status } from "@/components/Status";
-import { Icon } from "@/components/Icon";
-import { EmptyState } from "@/components/EmptyState";
-import { PageLoading } from "@/components/PageLoading";
-import { Diag } from "@/components/Diag";
-import { useAuth } from "@/context/auth";
-import { readApiError } from "@/api/client";
-import { formatRelative } from "@/utils/format";
-import type { Recording, RecordingProcessingStatus } from "@/api/types";
+import { Fragment, useLayoutEffect, useRef } from 'react';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
+import { fetchRecordings } from '@/api/endpoints';
+import { Button } from '@/components/Button';
+import { Status } from '@/components/Status';
+import { Avatar } from '@/components/Avatar';
+import { Icon } from '@/components/Icon';
+import { EmptyState } from '@/components/EmptyState';
+import { PageLoading } from '@/components/PageLoading';
+import { Diag } from '@/components/Diag';
+import { useAuth } from '@/context/auth';
+import { readApiError } from '@/api/client';
+import { recordingState, recordingStatus } from '@/utils/recording';
+import type { Recording } from '@/api/types';
 
-const MEETING_TYPES = ["全部", "内部会议", "客户调研", "方案汇报", "销售电话"];
-
-function statusLabel(status: RecordingProcessingStatus): string {
-  switch (status) {
-    case "done":
-      return "已完成";
-    case "running":
-      return "进行中";
-    case "queued":
-      return "排队中";
-    case "failed":
-      return "失败";
-    case "pending":
-    default:
-      return "未开始";
-  }
-}
-
-function overallStatus(rec: Recording): { tone: React.ComponentProps<typeof Status>["tone"]; label: string } {
-  if (rec.asr_status === "failed" || rec.summary_status === "failed") return { tone: "rust", label: "失败" };
-  if (rec.asr_status === "running" || rec.summary_status === "running") return { tone: "accent", label: "进行中" };
-  if (rec.asr_status === "queued") return { tone: "slate", label: "排队中" };
-  if (rec.asr_status === "done" && rec.summary_status === "done") return { tone: "moss", label: "已完成" };
-  if (rec.asr_status === "done") return { tone: "accent", label: "等待纪要" };
-  return { tone: "muted", label: "未开始" };
-}
+const MEETING_TYPES = ['全部', '内部会议', '客户调研', '方案汇报', '销售电话'];
+const STATES = ['all', 'active', 'failed', 'done', 'pending'];
 
 export function RecordingsList() {
   const { user } = useAuth();
-  const isOrgWide = user?.role === "manager" && (user?.managed_team_ids ?? []).includes("*");
-  const [scope, setScope] = useState<"mine" | "team">(isOrgWide ? "team" : "mine");
-  const [meetingType, setMeetingType] = useState<string>("全部");
-  const [q, setQ] = useState("");
-
+  const [params, setParams] = useSearchParams();
+  const latestParams = useRef(params);
+  useLayoutEffect(() => { latestParams.current = params; }, [params]);
   const navigate = useNavigate();
-
+  const canSeeTeam = user?.role === 'manager';
+  const isOrgWide = canSeeTeam && (user?.managed_team_ids ?? []).includes('*');
+  const scope = canSeeTeam && (params.get('scope') === 'team' || (!params.has('scope') && isOrgWide)) ? 'team' : 'mine';
+  const q = params.get('q') ?? '';
+  const meetingType = MEETING_TYPES.includes(params.get('type') ?? '') ? params.get('type')! : '全部';
+  const state = STATES.includes(params.get('status') ?? '') ? params.get('status')! : 'all';
+  function filter(key: string, value: string) {
+    const next = new URLSearchParams(latestParams.current);
+    if (!value || value === '全部' || value === 'all') next.delete(key);
+    else next.set(key, value);
+    latestParams.current = next;
+    setParams(next, { replace: true });
+  }
+  function clearFilters() {
+    const next = new URLSearchParams({ scope });
+    latestParams.current = next;
+    setParams(next, { replace: true });
+  }
   const query = useQuery({
-    queryKey: ["recordings", scope, meetingType, q],
+    queryKey: ['recordings', scope, meetingType, q],
     queryFn: () => fetchRecordings({ scope, meeting_type: meetingType, q }),
+    refetchInterval: 6000,
   });
-
-  const filtered = query.data ?? [];
-  const canSeeTeam = user?.role === "manager";
-
-  const totalLabel = useMemo(() => {
-    if (query.isLoading) return "加载中";
-    if (filtered.length === 0) return "0 条";
-    return `${filtered.length} 条`;
-  }, [filtered.length, query.isLoading]);
-
+  const filtered = (query.data ?? []).filter(rec => state === 'all' || recordingState(rec) === state);
+  const groups = new Map<string, Recording[]>();
+  for (const rec of filtered) {
+    const day = rec.updated_at?.slice(0, 10) || '日期未记录';
+    groups.set(day, [...(groups.get(day) ?? []), rec]);
+  }
+  const hasFilters = !!q || meetingType !== '全部' || state !== 'all';
+  const backTo = '/app/recordings' + (params.size ? '?' + params : '');
   return (
-    <div className="page-body page--object-index">
-      <PageHead
-        title="录音库"
-        subtitle={`当前 ${totalLabel}。点开任一条进入逐字稿、纪要和说话人视图。`}
-        actions={
-          <Button variant="primary" onClick={() => navigate("/app/recordings/new")}>
-            <Icon name="upload" size={14} /> 上传录音
-          </Button>
-        }
-      />
-
-      <div className="filter-bar">
-        <div className="filter-bar__search">
-          <Icon name="search" size={14} className="filter-bar__search-icon" />
-          <input
-            type="search"
-            placeholder="搜索标题、客户、标签、负责人"
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-          />
-        </div>
-        {canSeeTeam && (
-          <div className="filter-bar__segments" role="tablist" aria-label="可见范围">
-            <button role="tab" aria-selected={scope === "mine"} onClick={() => setScope("mine")}>
-              我的
-            </button>
-            <button role="tab" aria-selected={scope === "team"} onClick={() => setScope("team")}>
-              {isOrgWide ? "全部" : "团队"}
-            </button>
-          </div>
-        )}
-        <select
-          className="filter-bar__sort"
-          value={meetingType}
-          onChange={(e) => setMeetingType(e.target.value)}
-          aria-label="会议类型"
-        >
-          {MEETING_TYPES.map((t) => (
-            <option key={t} value={t}>
-              {t}
-            </option>
-          ))}
-        </select>
+    <div className="recordings-page">
+      <h1 className="sr-only">录音库</h1>
+      <div className="recordings-toolbar">
+        {canSeeTeam && <div className="filter-bar__segments" role="group" aria-label="可见范围">
+          <button aria-pressed={scope === 'mine'} onClick={() => filter('scope', 'mine')}>我的录音</button>
+          <button aria-pressed={scope === 'team'} onClick={() => filter('scope', 'team')}>{isOrgWide ? '全部录音' : '团队录音'}</button>
+        </div>}
+        <label className="recordings-search">
+          <Icon name="search" size={14} />
+          <input type="search" aria-label="搜索录音" placeholder="搜索标题、客户、标签、负责人" value={q} onChange={e => filter('q', e.target.value)} />
+        </label>
+        <Button variant="primary" onClick={() => navigate('/app/recordings/new')}>上传录音</Button>
       </div>
-
-      {query.isError && (
-        <Diag code="REC_E_LIST">{readApiError(query.error)}</Diag>
-      )}
-
-      {!query.isError && query.isLoading && <PageLoading />}
-
-      {!query.isError && !query.isLoading && (filtered.length === 0 ? (
-        <EmptyState
-          description={
-            q || meetingType !== "全部"
-              ? "当前筛选下没有匹配的录音。试试清空筛选条件。"
-              : "还没有任何录音。从右上角上传一段开始。"
-          }
-          action={
-            !q && meetingType === "全部" ? (
-              <Link to="/app/recordings/new">
-                <Button variant="ghost">上传录音</Button>
-              </Link>
-            ) : undefined
-          }
-        />
-      ) : (
-        <>
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th className="col-grow">录音</th>
-                <th className="col-fit">会议类型</th>
-                <th className="col-fit">客户 / 项目</th>
-                <th className="col-fit">时长</th>
-                <th className="col-fit">负责人</th>
-                <th className="col-fit">状态</th>
-                <th className="col-fit">更新</th>
-                <th className="col-fit"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map((rec) => {
-                const overall = overallStatus(rec);
-                return (
-                  <tr key={rec.id} onClick={() => navigate(`/app/recordings/${rec.id}`)} className="u-pointer">
-                    <td>
-                      <div className="cell-stack">
-                        <span className="primary">{rec.title}</span>
-                        <span className="secondary">{rec.filename}</span>
-                      </div>
-                    </td>
-                    <td className="cat">{rec.meeting_type}</td>
-                    <td className="meta">{rec.tag || "—"}</td>
-                    <td className="meta">{rec.duration_label}</td>
-                    <td className="meta">{rec.owner_name}</td>
-                    <td>
-                      <Status tone={overall.tone}>{overall.label}</Status>
-                      {rec.asr_status === "done" && rec.summary_status === "running" && (
-                        <span className="meta u-block u-fs-xs">
-                          纪要 {statusLabel(rec.summary_status)}
-                        </span>
-                      )}
-                    </td>
-                    <td className="meta">{formatRelative(rec.updated_at)}</td>
-                    <td>
-                      <button
-                        className="icon-btn"
-                        aria-label="打开"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          navigate(`/app/recordings/${rec.id}`);
-                        }}
-                      >
-                        <Icon name="external-link" size={14} />
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-
-          <div className="list-footer">
-            <span className="count">共 {filtered.length} 条</span>
-          </div>
-        </>
-      ))}
+      <div className="recordings-filters">
+        <span className="recordings-count" role="status">{query.isLoading ? '加载中' : filtered.length + ' 条录音'}</span>
+        <select value={state} onChange={e => filter('status', e.target.value)} aria-label="处理状态">
+          <option value="all">全部状态</option><option value="active">处理中</option><option value="failed">处理失败</option><option value="done">已生成</option><option value="pending">未完成</option>
+        </select>
+        <select value={meetingType} onChange={e => filter('type', e.target.value)} aria-label="会议类型">
+          {MEETING_TYPES.map(t => <option key={t} value={t}>{t === '全部' ? '全部类型' : t}</option>)}
+        </select>
+        {hasFilters && <Button size="sm" onClick={clearFilters}>清除筛选</Button>}
+      </div>
+      {query.isError ? <Diag code="REC_E_LIST">{readApiError(query.error)}<Button onClick={() => query.refetch()}>重试</Button></Diag> : query.isLoading ? <PageLoading /> : filtered.length === 0 ? (
+        <EmptyState description={hasFilters ? '当前条件没有匹配的录音。' : '还没有录音，上传一段开始。'} action={<Button onClick={() => hasFilters ? clearFilters() : navigate('/app/recordings/new')}>{hasFilters ? '清除筛选' : '上传录音'}</Button>} />
+      ) : <table className="recordings-table" aria-label="录音库">
+        <colgroup><col /><col className="recordings-state" /><col className="recordings-type" /><col className="recordings-tag" /><col className="recordings-duration" /><col className="recordings-date" /><col className="recordings-owner" /></colgroup>
+        <thead className="sr-only"><tr><th>录音</th><th>状态</th><th>会议类型</th><th>客户 / 项目</th><th>时长</th><th>更新时间</th><th>负责人</th></tr></thead>
+        <tbody>{[...groups.entries()].sort(([a], [b]) => b.localeCompare(a)).map(([day, rows]) => <Fragment key={day}>
+          <tr className="recordings-group"><th colSpan={7} scope="rowgroup">{day}<span>{rows.length}</span></th></tr>
+          {rows.map(rec => {
+            const status = recordingStatus(rec);
+            const to = '/app/recordings/' + rec.id;
+            return <tr key={rec.id} className="recordings-row" onClick={e => { if (!(e.target as HTMLElement).closest('a')) navigate(to, { state: { backTo } }); }}>
+              <td className="recordings-name"><Link to={to} state={{ backTo }} title={rec.title}>{rec.title}</Link></td>
+              <td className="recordings-state"><Status tone={status.tone}>{status.label}</Status></td>
+              <td className="recordings-type"><span className="recording-tag">{rec.meeting_type}</span></td>
+              <td className="recordings-tag" title={rec.tag ?? undefined}>{rec.tag}</td>
+              <td className="recordings-duration tnum">{rec.duration_label}</td>
+              <td className="recordings-date" title={rec.updated_at}>{rec.updated_at?.slice(11, 16)}</td>
+              <td className="recordings-owner"><span title={rec.owner_name} aria-label={'负责人：' + rec.owner_name}><Avatar name={rec.owner_name} size="sm" /></span></td>
+            </tr>;
+          })}
+        </Fragment>)}</tbody>
+      </table>}
     </div>
   );
 }

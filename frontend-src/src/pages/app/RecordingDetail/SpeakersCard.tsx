@@ -29,13 +29,13 @@ export function SpeakersCard({ recordingId, asrStatus }: Props) {
   });
 
   return (
-    <section className="card u-flex u-col u-gap-3">
+    <section className="record-speakers u-flex u-col u-gap-3">
       <header>
         <h3 className="u-fs-base u-fw-semibold u-m-0">
-          从当前录音指定声纹
+          说话人与声纹
         </h3>
         <p className="meta u-fs-xs u-fg-subtle u-mt-1">
-          先试听某个说话人的片段确认是谁，再点名字直接改成真实姓名。保存后本录音立即回填，并自动建立可跨录音识别的声纹。
+          试听后点击姓名修改。发言足够时同时建立声纹；不足时仅命名当前录音。
         </p>
       </header>
 
@@ -43,6 +43,8 @@ export function SpeakersCard({ recordingId, asrStatus }: Props) {
         <EmptyState description="转写完成后才能识别说话人。" />
       ) : candidates.isLoading ? (
         <p className="meta u-fs-xs">正在分析说话人……</p>
+      ) : candidates.isError ? (
+        <p role="alert">{readApiError(candidates.error)}<button className="btn" onClick={() => candidates.refetch()}>重试</button></p>
       ) : !candidates.data || candidates.data.length === 0 ? (
         <EmptyState description="本次转写没有识别出任何说话人。" />
       ) : (
@@ -121,6 +123,7 @@ function SpeakerTile({
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const savingRef = useRef(false);
 
   const nameMut = useMutation({
     mutationFn: async (name: string) => {
@@ -137,6 +140,7 @@ function SpeakerTile({
       setEditing(false);
     },
     onError: (err) => setError(readApiError(err)),
+    onSettled: () => { savingRef.current = false; },
   });
 
   function startEdit() {
@@ -145,12 +149,14 @@ function SpeakerTile({
     setEditing(true);
   }
   function commit() {
+    if (savingRef.current) return;
     const name = draft.trim();
     if (!name || name === candidate.speaker_name) {
       setEditing(false);
       return;
     }
     setError(null);
+    savingRef.current = true;
     nameMut.mutate(name);
   }
   function togglePlay() {
@@ -173,6 +179,7 @@ function SpeakerTile({
         {editing ? (
           <input
             className="field u-flex-1 u-minw-0 spc-name-input"
+            aria-label="说话人姓名"
             autoFocus
             value={draft}
             disabled={nameMut.isPending}

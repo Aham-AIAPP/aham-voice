@@ -3,6 +3,7 @@ import { Icon, type IconName } from "@/components/Icon";
 import { useAuth } from "@/context/auth";
 import { useState, useRef, useEffect } from "react";
 import { cn } from "@/utils/cn";
+import { useFocusTrap } from "@/hooks/useFocusTrap";
 import { Avatar } from "@/components/Avatar";
 
 interface NavItemDef {
@@ -107,7 +108,7 @@ function buildBreadcrumb(pathname: string): { href?: string; label: string }[] {
     acc += `/${seg}`;
     const isLast = i === segments.length - 1;
     let label = labelMap[seg] ?? seg;
-    if (isUuid(seg)) {
+    if (isUuid(seg) || (segments[i - 1] === "recordings" && seg !== "new")) {
       const parent = segments[i - 1] ?? "";
       label = tailFor[parent] ?? "详情";
     }
@@ -128,6 +129,60 @@ export function AppShell() {
   const crumbs = buildBreadcrumb(location.pathname);
 
   const [accountOpen, setAccountOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState(() => { try { return localStorage.getItem("voice.sidebar") === "collapsed"; } catch { return false; } });
+  const [narrow, setNarrow] = useState(() => window.matchMedia("(max-width: 1024px)").matches);
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const [theme, setTheme] = useState(() => document.documentElement.classList.contains("dark") ? "dark" : "light");
+  const sidebarRef = useFocusTrap<HTMLElement>(narrow && mobileOpen);
+  const paletteRef = useRef<HTMLDialogElement>(null);
+  const [commands, setCommands] = useState<Array<{ label: string; run: () => void }>>([]);
+  const [commandQuery, setCommandQuery] = useState("");
+  function toggleSidebar() {
+    if (narrow) setMobileOpen(value => !value);
+    else setCollapsed(value => !value);
+  }
+  function toggleTheme() { setTheme(value => value === "dark" ? "light" : "dark"); }
+  function openPalette() {
+    const pageCommands = Array.from(document.querySelectorAll<HTMLElement>("#main button, #main a[href], #main summary"))
+      .filter(el => !el.hasAttribute("disabled") && el.getAttribute("aria-hidden") !== "true")
+      .map(el => ({ label: el.getAttribute("aria-label") || el.textContent?.trim() || "", run: () => {
+        let parent = el.parentElement;
+        while (parent) { if (parent instanceof HTMLDetailsElement) parent.open = true; parent = parent.parentElement; }
+        el.scrollIntoView({ block: "nearest" }); el.focus(); el.click();
+      } })).filter(command => command.label);
+    setCommands([
+      ...sections.flatMap(section => section.items.map(item => ({ label: "前往 " + item.label, run: () => navigate(item.to) }))),
+      { label: "切换深色 / 浅色主题", run: toggleTheme },
+      { label: "展开 / 收起导航", run: toggleSidebar },
+      ...pageCommands,
+    ].filter((command, index, all) => all.findIndex(other => other.label === command.label) === index));
+    setCommandQuery("");
+    paletteRef.current?.showModal();
+  }
+  useEffect(() => {
+    const media = window.matchMedia("(max-width: 1024px)");
+    const update = () => { setNarrow(media.matches); setMobileOpen(false); };
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
+  useEffect(() => {
+    document.documentElement.classList.toggle("dark", theme === "dark");
+    document.documentElement.dataset.theme = theme;
+    try { localStorage.setItem("voice.theme", theme); } catch { /* Storage may be unavailable. */ }
+  }, [theme]);
+  useEffect(() => {
+    try { localStorage.setItem("voice.sidebar", collapsed ? "collapsed" : "expanded"); } catch { /* Storage may be unavailable. */ }
+  }, [collapsed]);
+  useEffect(() => {
+    function onKey(event: KeyboardEvent) {
+      if (document.querySelector('[aria-modal="true"], dialog[open]')) return;
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "b") { event.preventDefault(); toggleSidebar(); }
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") { event.preventDefault(); openPalette(); }
+      if (event.key === "Escape") { setAccountOpen(false); setMobileOpen(false); }
+    }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  });
   const menuRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     function onClick(e: MouseEvent) {
@@ -138,15 +193,16 @@ export function AppShell() {
   }, [accountOpen]);
 
   return (
-    <div className="app-shell">
+    <div className={cn("app-shell", collapsed && "is-collapsed", mobileOpen && "is-nav-open")}>
       <a className="skip-link" href="#main">
         跳到主内容
       </a>
 
-      <aside className="app-shell__sidebar">
+      {narrow && mobileOpen && <button className="nav-scrim" aria-label="关闭导航" onClick={() => setMobileOpen(false)} />}
+      <aside className="app-shell__sidebar" ref={sidebarRef} aria-label="导航侧栏">
         <div className="app-shell__brand">
-          <span className="app-shell__brand-glyph">O</span>
-          <span>
+          <button className="icon-btn sidebar-toggle" aria-label={narrow ? "关闭导航" : "收起导航"} title="展开 / 收起导航（⌘/Ctrl+B）" onClick={toggleSidebar}><Icon name="panel-left" size={14} /></button>
+          <span className="app-shell__brand-name">
             Orchisky <em>Voice</em>
           </span>
         </div>
@@ -158,12 +214,15 @@ export function AppShell() {
                 <NavLink
                   key={item.to}
                   to={item.to}
+                  title={item.label}
+                  aria-label={item.label}
+                  onClick={() => setMobileOpen(false)}
                   end={item.end}
                   className={({ isActive }) =>
                     cn("nav-item", isActive && "is-active")
                   }
                 >
-                  <Icon name={item.icon} size={16} className="nav-item__icon" />
+                  <Icon name={item.icon} size={14} className="nav-item__icon" />
                   <span className="nav-item__label">{item.label}</span>
                   {item.count != null && (
                     <span className="nav-item__count">{item.count}</span>
@@ -185,18 +244,20 @@ export function AppShell() {
           <button
             className="app-shell__account-menu"
             aria-label="账号菜单"
+            aria-expanded={accountOpen}
+            aria-haspopup="true"
             onClick={() => setAccountOpen((v) => !v)}
           >
             <Icon name="ellipsis" size={16} />
           </button>
           {accountOpen && (
             <div
-              role="menu"
+              onKeyDown={e => { if (e.key === "Escape") { setAccountOpen(false); menuRef.current?.querySelector<HTMLButtonElement>(".app-shell__account-menu")?.focus(); } }}
               className="menu shell-account-menu"
             >
               <button
                 type="button"
-                role="menuitem"
+
                 className="menu-item"
                 onClick={async () => {
                   setAccountOpen(false);
@@ -213,6 +274,7 @@ export function AppShell() {
       </aside>
 
       <header className="app-shell__topbar">
+        <button className="icon-btn topbar-nav-toggle" aria-label={mobileOpen ? "关闭导航" : "展开导航"} aria-expanded={narrow ? mobileOpen : !collapsed} title="展开 / 收起导航（⌘/Ctrl+B）" onClick={toggleSidebar}><Icon name="panel-left" size={14} /></button>
         <nav className="breadcrumb app-shell__topbar-breadcrumb" aria-label="位置">
           {crumbs.map((crumb, idx) => (
             <span key={`${crumb.label}-${idx}`}>
@@ -226,13 +288,14 @@ export function AppShell() {
           ))}
         </nav>
         <div className="app-shell__topbar-utils">
+          <button type="button" aria-label="搜索页面与操作" title="搜索页面与操作（⌘/Ctrl+K）" onClick={openPalette}><Icon name="search" size={14} /></button>
           <button
             type="button"
             aria-label="切换深色 / 浅色主题"
             title="切换深色 / 浅色主题"
-            onClick={() => document.documentElement.classList.toggle("dark")}
+            onClick={toggleTheme}
           >
-            <Icon name="sun" size={16} />
+            <Icon name={theme === "dark" ? "moon" : "sun"} size={14} />
           </button>
         </div>
       </header>
@@ -240,6 +303,15 @@ export function AppShell() {
       <main className="app-shell__body" id="main">
         <Outlet />
       </main>
+      <dialog className="command-palette" ref={paletteRef} aria-label="搜索页面与操作" onClick={event => { if (event.target === event.currentTarget) paletteRef.current?.close(); }}>
+        <div className="command-inner">
+          <div className="command-search"><input aria-label="搜索命令" placeholder="搜索页面与当前页操作" value={commandQuery} onChange={e => setCommandQuery(e.target.value)} onKeyDown={e => {
+            if (e.key === "Enter" && !e.nativeEvent.isComposing) { const command = commands.find(c => c.label.toLowerCase().includes(commandQuery.toLowerCase())); if (command) { e.preventDefault(); paletteRef.current?.close(); command.run(); } }
+          }} /><button className="icon-btn" aria-label="关闭命令搜索" onClick={() => paletteRef.current?.close()}><Icon name="x" size={14} /></button></div>
+          <div className="command-results">{commands.filter(c => c.label.toLowerCase().includes(commandQuery.toLowerCase())).map(c => <button key={c.label} onClick={() => { paletteRef.current?.close(); c.run(); }}>{c.label}</button>)}{!commands.some(c => c.label.toLowerCase().includes(commandQuery.toLowerCase())) && <p>没有匹配的操作</p>}</div>
+          <p className="command-help">⌘/Ctrl+K 搜索 · ⌘/Ctrl+B 导航 · Esc 关闭</p>
+        </div>
+      </dialog>
     </div>
   );
 }

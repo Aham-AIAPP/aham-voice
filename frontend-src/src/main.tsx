@@ -6,6 +6,11 @@ import { router } from "./router";
 import { AuthProvider } from "./context/auth";
 import "./styles/index.css";
 
+try {
+  const savedTheme = localStorage.getItem("voice.theme");
+  document.documentElement.classList.toggle("dark", savedTheme ? savedTheme === "dark" : window.matchMedia("(prefers-color-scheme: dark)").matches);
+} catch { /* Render normally if browser storage is unavailable. */ }
+
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {

@@ -33,7 +33,7 @@ export function ReviseComposer({ recordingId, disabled, disabledReason }: Props)
 
   function submit(event: FormEvent | KeyboardEvent) {
     event.preventDefault();
-    if (!text.trim() || disabled) return;
+    if (!text.trim() || disabled || revise.isPending) return;
     setError(null);
     revise.mutate();
   }
@@ -51,6 +51,7 @@ export function ReviseComposer({ recordingId, disabled, disabledReason }: Props)
     >
       {error && <Diag code="SUM_E_REVISE">{error}</Diag>}
       <Textarea
+        aria-label="纪要修改要求"
         value={text}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={onKeyDown}
@@ -68,7 +69,7 @@ export function ReviseComposer({ recordingId, disabled, disabledReason }: Props)
         </span>
         <Button
           type="submit"
-          variant="primary"
+          variant="secondary"
           size="sm"
           loading={revise.isPending}
           disabled={disabled || !text.trim()}

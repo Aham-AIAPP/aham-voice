@@ -95,12 +95,12 @@ export async function processRecording(id: string): Promise<{ recording_id: stri
   return data;
 }
 
-export async function transcribeRecording(id: string): Promise<{ recording_id: string; segments: number; speakers: number }> {
+export async function transcribeRecording(id: string): Promise<{ recording_id: string; job_id: string; status: string }> {
   const { data } = await api.post(`/recordings/${id}/transcribe`);
   return data;
 }
 
-export async function summarizeRecording(id: string): Promise<{ recording_id: string; model: string; summary_id: string; version: number }> {
+export async function summarizeRecording(id: string): Promise<{ recording_id: string; job_id: string; status: string }> {
   const { data } = await api.post(`/recordings/${id}/summarize`);
   return data;
 }

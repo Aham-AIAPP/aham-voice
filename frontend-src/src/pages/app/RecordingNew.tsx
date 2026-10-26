@@ -211,7 +211,7 @@ export function RecordingNew() {
               ? uploadPct !== null && uploadPct < 100
                 ? `上传中 ${uploadPct}%`
                 : "处理中…"
-              : "上传并开始"}
+              : autoProcess ? "上传并开始" : "上传录音"}
           </Button>
         </div>
       </form>
