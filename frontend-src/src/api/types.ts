@@ -13,6 +13,9 @@ export interface User {
   email: string;
   mobile: string;
   dept: string;
+  role: Role;
+  team_id: string | null;
+  managed_team_ids: string[];
   status: UserStatus;
   source: UserSource;
   wecom_userid: string | null;
@@ -51,7 +54,11 @@ export interface Recording {
   title: string;
   filename: string;
   file_path: string;
+  meeting_type: string;
   tag: string | null;
+  owner_id: string;
+  owner_name: string;
+  team_id: string | null;
   duration: number;
   duration_label: string;
   asr_status: RecordingProcessingStatus;
@@ -85,6 +92,19 @@ export interface Summary {
   base_summary_id: string | null;
   is_current: number;
   content_length?: number;
+  evidence?: { kind: "transcript"; recording_id: string; title: string };
+}
+
+export interface SummaryRevisionDraft {
+  draft_id: string;
+  recording_id: string;
+  base_summary_id: string;
+  base_content: string;
+  content: string;
+  model: string;
+  created_at: string;
+  status: "awaiting_confirmation";
+  evidence: { kind: "transcript"; recording_id: string; title: string };
 }
 
 export interface RecordingTask {
@@ -124,6 +144,8 @@ export interface Hotword {
   frequency: number;
   confidence: number;
   score: number;
+  team_id: string | null;
+  owner_id: string | null;
   first_seen_at: string | null;
   last_seen_at: string | null;
   last_used_at: string | null;
@@ -132,54 +154,46 @@ export interface Hotword {
   updated_at: string | null;
 }
 
-// Response of `PUT /api/hotwords` (personal-mode bulk replace). `words` is the
-// deduped, sorted list the backend actually persisted.
-export interface SaveAllHotwordsResponse {
-  ok: boolean;
-  count: number;
-  words: string[];
-}
-
-export interface HotwordSource {
-  id: string;
-  name: string;
-  source_type: string;
-  enabled: number;
-  schedule_minutes: number;
-  lookback_days: number;
-  asr_limit: number;
-  correction_limit: number;
-  candidate_limit: number;
-  last_success_at: string | null;
-  last_error: string | null;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface HotwordStatus {
-  total: number;
-  active: number;
-  protected: number;
-  dynamic: number;
-  expired: number;
-  limits: { asr: number; correction: number; protected: number };
-  by_source: Array<{
-    source: string;
-    total: number;
-    active: number;
-    protected: number;
-  }>;
-  sources: HotwordSource[];
-}
 
 export interface Voiceprint {
   id: string;
   name: string;
-  note: string | null;
+  note?: string | null;
+  owner_id: string | null;
+  team_id: string | null;
+  scope: "personal" | "team" | "global";
   threshold: number;
   active: number;
   created_at: string;
   sample_path?: string;
+}
+
+// 大模型（LLM）配置 —— 对齐 aham-voice 开源版。API Key 永不回显。
+export interface Settings {
+  llm_configured: boolean;
+  llm_api_base: string;
+  llm_model: string;
+  llm_provider: string;
+  // legacy DeepSeek 别名（后端同步返回，兼容旧缓存）
+  deepseek_configured?: boolean;
+  deepseek_api_base?: string;
+  deepseek_model?: string;
+}
+
+export interface LlmTestResult {
+  ok: boolean;
+  model: string;
+  latency_ms: number;
+  error?: string;
+}
+
+// 录音详情页给说话人命名并建声纹的结果。能建声纹的说话人命名后即返回新建的 profile。
+export interface NameSpeakerResult {
+  profile: Voiceprint;
+  sample_count: number;
+  sample_duration: number;
+  sample_duration_label: string;
+  updated_segments: number;
 }
 
 export interface SpeakerSampleSegment {
@@ -225,6 +239,25 @@ export interface RoleMapping {
   updated_at: string;
 }
 
+export interface WecomConfig {
+  corp_id: string;
+  sales_department_id: string;
+  secret_configured: boolean;
+  secret?: string;
+}
+
+export interface WecomSyncResult {
+  preview: boolean;
+  added: string[];
+  updated: string[];
+  disabled: string[];
+  added_count: number;
+  updated_count: number;
+  disabled_count: number;
+  team_count: number;
+  initial_password: string | null;
+}
+
 export interface AuditRow {
   id: string;
   created_at: string;
@@ -253,10 +286,6 @@ export interface SystemStatus {
   punc: boolean;
   voiceprint: boolean;
   ffmpeg: boolean;
-  llm_configured: boolean;
-  llm_model: string;
-  llm_provider: string;
-  // Legacy DeepSeek aliases, kept for backward compatibility.
   deepseek_configured: boolean;
   deepseek_model: string;
   segmentation: string;
@@ -309,85 +338,4 @@ export interface RecordingDetail {
     version?: number;
   }>;
   hotword_package: HotwordPackage | null;
-}
-
-export interface DeleteRecordingResponse {
-  ok: boolean;
-  deleted_id: string;
-}
-
-export interface Settings {
-  // Generic LLM fields (any OpenAI-compatible endpoint).
-  llm_configured: boolean;
-  llm_api_base: string;
-  llm_model: string;
-  llm_provider: string;
-  // Legacy DeepSeek aliases, kept for backward compatibility.
-  deepseek_configured: boolean;
-  deepseek_api_base: string;
-  deepseek_model: string;
-}
-
-// One local model in the download manager. `status` is derived from the remote
-// file listing, not from "does the folder exist" — a half-downloaded model looks
-// identical on disk to a finished one.
-export type ModelStatus = "missing" | "partial" | "ready" | "downloading" | "queued";
-
-export interface ModelProgress {
-  status: string;
-  transferred_bytes: number;
-  current_file: string;
-  speed_bps: number;
-  error: string;
-  downloaded_bytes: number;
-  total_bytes: number;
-  percent: number;
-}
-
-export interface ModelInfo {
-  key: string;
-  model_id: string;
-  label: string;
-  purpose: string;
-  required: boolean;
-  path: string;
-  /** Ships inside the .app bundle: read-only, cannot be deleted or re-downloaded. */
-  bundled: boolean;
-  local_bytes: number;
-  total_bytes: number;
-  verified: boolean;
-  missing_files: string[];
-  status: ModelStatus;
-  progress?: ModelProgress;
-}
-
-// Resolved MCP wiring for this install — paths differ between a dev checkout
-// and the .app bundle, so the backend computes them.
-export interface McpConfig {
-  script_path: string;
-  script_exists: boolean;
-  runtime_path: string;
-  client_config_path: string;
-  uv_path: string;
-  uv_found: boolean;
-  snippet: string;
-  tool_count: number;
-}
-
-export interface ModelsStatus {
-  models: ModelInfo[];
-  ready: boolean;
-  required_missing: string[];
-  total_bytes: number;
-  local_bytes: number;
-  downloading: string[];
-}
-
-// Result of POST /api/settings/test — a live probe of the LLM endpoint.
-// `error` (friendly Chinese) is present only when `ok` is false.
-export interface LlmTestResult {
-  ok: boolean;
-  model: string;
-  latency_ms: number;
-  error?: string;
 }

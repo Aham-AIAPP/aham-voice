@@ -12,8 +12,8 @@ export const Field = forwardRef<HTMLInputElement, FieldProps>(function Field(
   return (
     <input
       ref={ref}
-      className={cn("input", invalid && "is-error", className)}
-      aria-invalid={invalid || undefined}
+      className={cn("field", className)}
+      data-state={invalid ? "error" : undefined}
       {...rest}
     />
   );
@@ -30,17 +30,16 @@ export const Textarea = forwardRef<HTMLTextAreaElement, TextareaProps>(function 
   return (
     <textarea
       ref={ref}
-      className={cn("textarea", invalid && "is-error", className)}
-      aria-invalid={invalid || undefined}
+      className={cn("field", className)}
+      data-state={invalid ? "error" : undefined}
       {...rest}
     />
   );
 });
 
-// Labelled control + help block, mapped onto the official `.field` wrapper
-// (flex column) with `.label` / `.hint` / `.err`. Use everywhere there's a
-// labelled control — including login. When `error` is present the message
-// renders as `.err` (red); otherwise `.hint`.
+// .form-row label + control + help block. Use everywhere there's a labelled
+// control — including login. The .has-error modifier paints help text red
+// and tints the control border.
 export function FormRow({
   label,
   hint,
@@ -63,20 +62,25 @@ export function FormRow({
   htmlFor?: string;
 }) {
   return (
-    <div className={cn("field", horizontal && "field--row", className)}>
+    <div
+      className={cn(
+        "form-row",
+        horizontal && "form-row--horizontal",
+        error && "has-error",
+        className,
+      )}
+    >
       {label && (
-        <label className="label" htmlFor={htmlFor}>
+        <label className="form-row__label" htmlFor={htmlFor}>
           {label}
-          {required && <span className="label__req">*</span>}
-          {optional && <span className="label__opt">可选</span>}
+          {required && <span className="req">*</span>}
+          {optional && <span className="opt">可选</span>}
         </label>
       )}
       {children}
-      {error ? (
-        <p className="err">{error}</p>
-      ) : hint ? (
-        <p className="hint">{hint}</p>
-      ) : null}
+      {(hint || error) && (
+        <p className="form-row__help">{error ?? hint}</p>
+      )}
     </div>
   );
 }
@@ -92,11 +96,7 @@ export function FormSection({
 }) {
   return (
     <section className={cn("form-section", className)}>
-      {title && (
-        <h3 className="text-subheading form-section__title">
-          {title}
-        </h3>
-      )}
+      {title && <h3 className="form-section__title">{title}</h3>}
       {children}
     </section>
   );

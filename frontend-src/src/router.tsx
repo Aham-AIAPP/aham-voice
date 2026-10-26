@@ -1,23 +1,62 @@
 import { createBrowserRouter, Navigate } from "react-router-dom";
+import { AuthShell } from "@/layouts/AuthShell";
 import { AppShell } from "@/layouts/AppShell";
+import { ProtectedRoute } from "@/components/ProtectedRoute";
+import { Login } from "@/pages/auth/Login";
+import { ChangePassword } from "@/pages/auth/ChangePassword";
 import { RecordingsList } from "@/pages/app/RecordingsList";
 import { RecordingNew } from "@/pages/app/RecordingNew";
 import { RecordingDetail } from "@/pages/app/RecordingDetail";
 import { Hotwords } from "@/pages/app/Hotwords";
 import { Voiceprints } from "@/pages/app/Voiceprints";
-import { Settings } from "@/pages/app/Settings";
+import { Integrations } from "@/pages/app/Integrations";
+import { AdminOverview } from "@/pages/admin/Overview";
+import { AdminUsers } from "@/pages/admin/Users";
+import { AdminTeams } from "@/pages/admin/Teams";
+import { AdminPermissions } from "@/pages/admin/Permissions";
+import { AdminWecom } from "@/pages/admin/Wecom";
+import { AdminAudit } from "@/pages/admin/Audit";
+import { AdminVoiceprints } from "@/pages/admin/Voiceprints";
+import { AdminHotwords } from "@/pages/admin/Hotwords";
+import { AdminSettings } from "@/pages/admin/Settings";
 import { NotFound } from "@/pages/NotFound";
+import { AppError } from "@/pages/AppError";
 
-// Single-user desktop build: no login, no admin console. The app boots straight
-// into the workspace; the backend always resolves the one local user.
 export const router = createBrowserRouter([
   {
     path: "/",
     element: <Navigate to="/app/recordings/new" replace />,
+    errorElement: <AppError />,
+  },
+  {
+    path: "/login",
+    element: <AuthShell />,
+    errorElement: <AppError />,
+    children: [{ index: true, element: <Login /> }],
+  },
+  {
+    path: "/auth",
+    element: <AuthShell />,
+    errorElement: <AppError />,
+    children: [
+      {
+        path: "change-password",
+        element: (
+          <ProtectedRoute requirePasswordChanged={false}>
+            <ChangePassword />
+          </ProtectedRoute>
+        ),
+      },
+    ],
   },
   {
     path: "/app",
-    element: <AppShell />,
+    element: (
+      <ProtectedRoute roles={["member", "manager"]}>
+        <AppShell />
+      </ProtectedRoute>
+    ),
+    errorElement: <AppError />,
     children: [
       { index: true, element: <Navigate to="/app/recordings/new" replace /> },
       { path: "workspace", element: <Navigate to="/app/recordings/new" replace /> },
@@ -26,7 +65,28 @@ export const router = createBrowserRouter([
       { path: "recordings/:id", element: <RecordingDetail /> },
       { path: "hotwords", element: <Hotwords /> },
       { path: "voiceprints", element: <Voiceprints /> },
-      { path: "settings", element: <Settings /> },
+      { path: "integrations", element: <Integrations /> },
+    ],
+  },
+  {
+    path: "/admin",
+    element: (
+      <ProtectedRoute roles={["admin"]}>
+        <AppShell />
+      </ProtectedRoute>
+    ),
+    errorElement: <AppError />,
+    children: [
+      { index: true, element: <Navigate to="/admin/overview" replace /> },
+      { path: "overview", element: <AdminOverview /> },
+      { path: "users", element: <AdminUsers /> },
+      { path: "teams", element: <AdminTeams /> },
+      { path: "permissions", element: <AdminPermissions /> },
+      { path: "wecom", element: <AdminWecom /> },
+      { path: "audit", element: <AdminAudit /> },
+      { path: "voiceprints", element: <AdminVoiceprints /> },
+      { path: "hotword", element: <AdminHotwords /> },
+      { path: "llm", element: <AdminSettings /> },
     ],
   },
   {

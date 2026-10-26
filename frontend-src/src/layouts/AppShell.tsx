@@ -1,7 +1,10 @@
-import { useEffect, useState } from "react";
-import { NavLink, Outlet, useLocation } from "react-router-dom";
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { Icon, type IconName } from "@/components/Icon";
+import { useAuth } from "@/context/auth";
+import { useState, useRef, useEffect } from "react";
 import { cn } from "@/utils/cn";
+import { useFocusTrap } from "@/hooks/useFocusTrap";
+import { Avatar } from "@/components/Avatar";
 
 interface NavItemDef {
   to: string;
@@ -10,10 +13,6 @@ interface NavItemDef {
   count?: number | string;
   badge?: string;
   end?: boolean;
-  // Custom active matcher. When provided, overrides NavLink's default/`end`
-  // matching — used so 录音库 lights up on the list + detail pages but NOT on
-  // /app/recordings/new (which 新增录音 owns exclusively).
-  isActive?: (pathname: string) => boolean;
 }
 
 interface NavSectionDef {
@@ -26,20 +25,9 @@ function memberSections(): NavSectionDef[] {
     {
       title: "AI 工作台",
       items: [
-        { to: "/app/recordings/new", icon: "plus", label: "新增录音", end: true },
-        {
-          to: "/app/recordings",
-          icon: "audio-lines",
-          label: "录音库",
-          // List + detail (/app/recordings, /app/recordings/:id) but never /new.
-          isActive: (pathname) =>
-            pathname === "/app/recordings" ||
-            (pathname.startsWith("/app/recordings/") &&
-              pathname !== "/app/recordings/new"),
-          // end → 内置 aria-current 仅精确匹配 /app/recordings；视觉高亮仍由
-          // 上面的 isActive 控制（详情页照常点亮，/new 不再重复 aria-current）。
-          end: true,
-        },
+        { to: "/app/recordings/new", icon: "plus", label: "新增" },
+        { to: "/app/recordings", icon: "audio-lines", label: "录音库", end: true },
+        { to: "/app/integrations", icon: "plug", label: "钉钉同步与 MCP" },
       ],
     },
     {
@@ -47,6 +35,38 @@ function memberSections(): NavSectionDef[] {
       items: [
         { to: "/app/hotwords", icon: "spell-check", label: "热词" },
         { to: "/app/voiceprints", icon: "mic", label: "声纹" },
+      ],
+    },
+  ];
+}
+
+function adminSections(): NavSectionDef[] {
+  return [
+    {
+      title: "总览",
+      items: [{ to: "/admin/overview", icon: "layout-dashboard", label: "总览" }],
+    },
+    {
+      title: "成员与团队",
+      items: [
+        { to: "/admin/users", icon: "users", label: "用户" },
+        { to: "/admin/teams", icon: "building-2", label: "团队" },
+        { to: "/admin/permissions", icon: "shield", label: "角色映射" },
+        { to: "/admin/wecom", icon: "plug", label: "企业微信" },
+      ],
+    },
+    {
+      title: "数据与样本",
+      items: [
+        { to: "/admin/hotword", icon: "spell-check", label: "热词" },
+        { to: "/admin/voiceprints", icon: "mic", label: "声纹库" },
+      ],
+    },
+    {
+      title: "运维与审计",
+      items: [
+        { to: "/admin/audit", icon: "activity", label: "审计日志" },
+        { to: "/admin/llm", icon: "sliders-horizontal", label: "系统配置" },
       ],
     },
   ];
@@ -62,21 +82,15 @@ function buildBreadcrumb(pathname: string): { href?: string; label: string }[] {
     new: "上传录音",
     hotwords: "热词",
     voiceprints: "声纹",
-    settings: "设置",
+    integrations: "钉钉同步与 MCP",
     overview: "总览",
     users: "用户",
     teams: "团队",
     permissions: "角色映射",
     wecom: "企业微信",
-    hotword: "热词总览",
-    "hotword-sources": "热词来源",
+    hotword: "热词",
     audit: "审计日志",
-    asr: "ASR 配置",
-    llm: "大模型",
-    storage: "存储",
-    "storage-queue": "队列",
-    export: "导出",
-    "export-templates": "导出模板",
+    llm: "系统配置",
   };
   // UUID-looking segments are record IDs — replace with a friendly tail label
   // based on the preceding segment (e.g. /recordings/<uuid> → "录音详情").
@@ -94,7 +108,7 @@ function buildBreadcrumb(pathname: string): { href?: string; label: string }[] {
     acc += `/${seg}`;
     const isLast = i === segments.length - 1;
     let label = labelMap[seg] ?? seg;
-    if (isUuid(seg)) {
+    if (isUuid(seg) || (segments[i - 1] === "recordings" && seg !== "new")) {
       const parent = segments[i - 1] ?? "";
       label = tailFor[parent] ?? "详情";
     }
@@ -108,153 +122,210 @@ function buildBreadcrumb(pathname: string): { href?: string; label: string }[] {
 }
 
 export function AppShell() {
+  const { user, logout } = useAuth();
   const location = useLocation();
-  const sections = memberSections();
+  const navigate = useNavigate();
+  const sections = user?.role === "admin" ? adminSections() : memberSections();
   const crumbs = buildBreadcrumb(location.pathname);
 
-  // Mobile drawer state: on narrow viewports the sidebar collapses off-canvas
-  // and is toggled by the navbar hamburger. CSS (.sidebar.is-open) handles the
-  // slide-in; the scrim only renders while open. The drawer auto-closes on
-  // route change so navigating from within it dismisses the overlay.
-  const [drawerOpen, setDrawerOpen] = useState(false);
-
+  const [accountOpen, setAccountOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState(() => { try { return localStorage.getItem("voice.sidebar") === "collapsed"; } catch { return false; } });
+  const [narrow, setNarrow] = useState(() => window.matchMedia("(max-width: 1024px)").matches);
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const [theme, setTheme] = useState(() => document.documentElement.classList.contains("dark") ? "dark" : "light");
+  const sidebarRef = useFocusTrap<HTMLElement>(narrow && mobileOpen);
+  const shortcutsRef = useRef<HTMLDialogElement>(null);
+  const paletteRef = useRef<HTMLDialogElement>(null);
+  const [commands, setCommands] = useState<Array<{ label: string; run: () => void }>>([]);
+  const [commandQuery, setCommandQuery] = useState("");
+  function toggleSidebar() {
+    if (narrow) setMobileOpen(value => !value);
+    else setCollapsed(value => !value);
+  }
+  function toggleTheme() { setTheme(value => value === "dark" ? "light" : "dark"); }
+  function openPalette() {
+    const pageCommands = Array.from(document.querySelectorAll<HTMLElement>("#main button, #main a[href], #main summary"))
+      .filter(el => !el.hasAttribute("disabled") && el.getAttribute("aria-hidden") !== "true")
+      .map(el => ({ label: el.getAttribute("aria-label") || el.textContent?.trim() || "", run: () => {
+        let parent = el.parentElement;
+        while (parent) { if (parent instanceof HTMLDetailsElement) parent.open = true; parent = parent.parentElement; }
+        el.scrollIntoView({ block: "nearest" }); el.focus(); el.click();
+      } })).filter(command => command.label);
+    setCommands([
+      ...sections.flatMap(section => section.items.map(item => ({ label: "前往 " + item.label, run: () => navigate(item.to) }))),
+      { label: "键盘快捷键", run: () => shortcutsRef.current?.showModal() },
+      { label: "切换深色 / 浅色主题", run: toggleTheme },
+      { label: "展开 / 收起导航", run: toggleSidebar },
+      ...pageCommands,
+    ].filter((command, index, all) => all.findIndex(other => other.label === command.label) === index));
+    setCommandQuery("");
+    paletteRef.current?.showModal();
+  }
   useEffect(() => {
-    setDrawerOpen(false);
-  }, [location.pathname]);
-
-  // Esc closes the drawer when it's open.
+    const media = window.matchMedia("(max-width: 1024px)");
+    const update = () => { setNarrow(media.matches); setMobileOpen(false); };
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
   useEffect(() => {
-    if (!drawerOpen) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setDrawerOpen(false);
-    };
+    document.documentElement.classList.toggle("dark", theme === "dark");
+    document.documentElement.dataset.theme = theme;
+    try { localStorage.setItem("voice.theme", theme); } catch { /* Storage may be unavailable. */ }
+  }, [theme]);
+  useEffect(() => {
+    try { localStorage.setItem("voice.sidebar", collapsed ? "collapsed" : "expanded"); } catch { /* Storage may be unavailable. */ }
+  }, [collapsed]);
+  useEffect(() => {
+    function onKey(event: KeyboardEvent) {
+      if (document.querySelector('[aria-modal="true"], dialog[open]')) return;
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "b") { event.preventDefault(); toggleSidebar(); }
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") { event.preventDefault(); openPalette(); }
+      const target = event.target as HTMLElement;
+      const editing = target.closest('input, textarea, select, [contenteditable="true"]');
+      if (event.key === "?" && !editing && !event.ctrlKey && !event.metaKey && !event.altKey) {
+        event.preventDefault(); shortcutsRef.current?.showModal();
+      }
+      if (event.key === "Escape") { setAccountOpen(false); setMobileOpen(false); }
+    }
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [drawerOpen]);
+  });
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    function onClick(e: MouseEvent) {
+      if (!menuRef.current?.contains(e.target as Node)) setAccountOpen(false);
+    }
+    if (accountOpen) document.addEventListener("mousedown", onClick);
+    return () => document.removeEventListener("mousedown", onClick);
+  }, [accountOpen]);
 
   return (
-    <div className="shell">
+    <div className={cn("app-shell", collapsed && "is-collapsed", mobileOpen && "is-nav-open")}>
       <a className="skip-link" href="#main">
         跳到主内容
       </a>
 
-      {drawerOpen && (
-        <div
-          className="sidebar-scrim"
-          onClick={() => setDrawerOpen(false)}
-          aria-hidden="true"
-        />
-      )}
-
-      <aside
-        className={cn("sidebar", drawerOpen && "is-open")}
-        aria-label="主导航"
-      >
-        <div className="lockup sidebar__brand">
-          <img
-            src="/favicon.svg"
-            alt="Aham Voice"
-            width={30}
-            height={30}
-            className="lk-icon"
-            // favicon.svg already carries its own rounded-square gradient, so
-            // clear the .lk-icon accent fill and let the artwork show through.
-            style={{ background: "transparent", borderRadius: "var(--r-md)" }}
-          />
-          <div className="lk-body">
-            <span className="lk-title">Aham Voice</span>
-          </div>
+      {narrow && mobileOpen && <button className="nav-scrim" aria-label="关闭导航" onClick={() => setMobileOpen(false)} />}
+      <aside className="app-shell__sidebar" ref={sidebarRef} aria-label="导航侧栏">
+        <div className="app-shell__brand">
+          <button className="icon-btn sidebar-toggle" aria-label={narrow ? "关闭导航" : "收起导航"} title="展开 / 收起导航（⌘/Ctrl+B）" onClick={toggleSidebar}><Icon name="panel-left" size={14} /></button>
+          <span className="app-shell__brand-name">
+            Orchisky <em>Voice</em>
+          </span>
         </div>
-
-        <nav className="sidebar__nav">
+        <nav className="app-shell__sidebar-nav" aria-label="主导航">
           {sections.map((section) => (
-            <div className="nav-group" key={section.title}>
-              <div className="nav-grouptitle">{section.title}</div>
+            <div className="nav-section" key={section.title}>
+              <div className="nav-section__title">{section.title}</div>
               {section.items.map((item) => (
                 <NavLink
                   key={item.to}
                   to={item.to}
+                  title={item.label}
+                  aria-label={item.label}
+                  onClick={() => setMobileOpen(false)}
                   end={item.end}
                   className={({ isActive }) =>
-                    cn(
-                      "nav-item",
-                      (item.isActive ? item.isActive(location.pathname) : isActive) &&
-                        "nav-item--on",
-                    )
+                    cn("nav-item", (isActive || (item.to === "/app/recordings" && location.pathname.startsWith("/app/recordings/") && location.pathname !== "/app/recordings/new")) && "is-active")
                   }
                 >
-                  <Icon name={item.icon} size={18} className="ico" />
+                  <Icon name={item.icon} size={14} className="nav-item__icon" />
                   <span className="nav-item__label">{item.label}</span>
-                  {item.count != null && <span className="badge">{item.count}</span>}
-                  {item.badge && <span className="badge">{item.badge}</span>}
+                  {item.count != null && (
+                    <span className="nav-item__count">{item.count}</span>
+                  )}
                 </NavLink>
               ))}
             </div>
           ))}
         </nav>
-
-        <div className="sidebar__foot" style={{ marginBlockStart: "auto" }}>
-          <NavLink
-            to="/app/settings"
-            className={({ isActive }) => cn("nav-item", "app-settings-link", isActive && "nav-item--on")}
+        <div className="app-shell__account" ref={menuRef}>
+          <Avatar name={user?.name} size="md" className="app-shell__account-avatar" />
+          <span className="app-shell__account-name">
+            {user?.name ?? "—"}
+            <span className="app-shell__account-role">
+              {user?.role === "admin" ? "管理员" : user?.role === "manager" ? "组长" : "成员"}
+              {user?.dept ? ` · ${user.dept}` : ""}
+            </span>
+          </span>
+          <button
+            className="app-shell__account-menu"
+            aria-label="账号菜单"
+            aria-expanded={accountOpen}
+            aria-haspopup="true"
+            onClick={() => setAccountOpen((v) => !v)}
           >
-            <Icon name="settings" size={18} className="ico" />
-            <span className="nav-item__label">设置</span>
-          </NavLink>
+            <Icon name="ellipsis" size={16} />
+          </button>
+          {accountOpen && (
+            <div
+              onKeyDown={e => { if (e.key === "Escape") { setAccountOpen(false); menuRef.current?.querySelector<HTMLButtonElement>(".app-shell__account-menu")?.focus(); } }}
+              className="menu shell-account-menu"
+            >
+              <button
+                type="button"
+
+                className="menu-item"
+                onClick={async () => {
+                  setAccountOpen(false);
+                  await logout();
+                  navigate("/login", { replace: true });
+                }}
+              >
+                <Icon name="log-out" size={14} />
+                <span>退出登录</span>
+              </button>
+            </div>
+          )}
         </div>
       </aside>
 
-      <div className="col">
-        <header className="navbar">
-          <div className="container container--content navbar__inner">
-            <button
-              type="button"
-              className="icon-btn navbar__menu"
-              aria-label="打开导航菜单"
-              aria-expanded={drawerOpen}
-              onClick={() => setDrawerOpen((v) => !v)}
-            >
-              <Icon name="menu" size={18} />
-            </button>
-            <nav className="crumb" aria-label="位置">
-              {crumbs.map((crumb, idx) => (
-                <span key={`${crumb.label}-${idx}`} className="row" style={{ gap: "var(--s2)" }}>
-                  {idx > 0 && <span className="sep">/</span>}
-                  {crumb.href ? (
-                    <NavLink to={crumb.href}>{crumb.label}</NavLink>
-                  ) : (
-                    <span className="here">{crumb.label}</span>
-                  )}
-                </span>
-              ))}
-            </nav>
-            <div className="nav-actions">
-            <button
-              type="button"
-              className="icon-btn"
-              aria-label="主题"
-              onClick={() => {
-                const root = document.documentElement;
-                // Resolve the currently-effective theme: explicit data-theme wins,
-                // otherwise fall back to the system preference.
-                const current =
-                  root.getAttribute("data-theme") ??
-                  (window.matchMedia("(prefers-color-scheme: dark)").matches
-                    ? "dark"
-                    : "light");
-                root.setAttribute("data-theme", current === "dark" ? "light" : "dark");
-              }}
-            >
-              <Icon name="sun" size={18} />
-            </button>
-            </div>
-          </div>
-        </header>
+      <header className="app-shell__topbar">
+        <button className="icon-btn topbar-nav-toggle" aria-label={mobileOpen ? "关闭导航" : "展开导航"} aria-expanded={narrow ? mobileOpen : !collapsed} title="展开 / 收起导航（⌘/Ctrl+B）" onClick={toggleSidebar}><Icon name="panel-left" size={14} /></button>
+        <nav className="breadcrumb app-shell__topbar-breadcrumb" aria-label="位置">
+          {crumbs.map((crumb, idx) => (
+            <span key={`${crumb.label}-${idx}`}>
+              {idx > 0 && <span className="breadcrumb__sep">/</span>}
+              {crumb.href ? (
+                <NavLink to={crumb.href}>{crumb.label}</NavLink>
+              ) : (
+                <span className="breadcrumb__current">{crumb.label}</span>
+              )}
+            </span>
+          ))}
+        </nav>
+        <div className="app-shell__topbar-utils">
+          <button type="button" aria-label="搜索页面与操作" title="搜索页面与操作（⌘/Ctrl+K）" onClick={openPalette}><Icon name="search" size={14} /></button>
+          <button
+            type="button"
+            aria-label="切换深色 / 浅色主题"
+            title="切换深色 / 浅色主题"
+            onClick={toggleTheme}
+          >
+            <Icon name={theme === "dark" ? "moon" : "sun"} size={14} />
+          </button>
+        </div>
+      </header>
 
-        <main className="fill track-web" id="main">
-          <Outlet />
-        </main>
-      </div>
+      <main className="app-shell__body" id="main">
+        <Outlet />
+      </main>
+      <dialog className="command-palette" ref={shortcutsRef} aria-label="键盘快捷键" onClick={event => { if (event.target === event.currentTarget) shortcutsRef.current?.close(); }}>
+        <div className="command-inner shortcuts-help">
+          <h2>键盘快捷键</h2>
+          <dl><div><dt>搜索页面与操作</dt><dd>⌘ / Ctrl + K</dd></div><div><dt>展开或收起导航</dt><dd>⌘ / Ctrl + B</dd></div><div><dt>查看快捷键</dt><dd>?</dd></div><div><dt>切换焦点</dt><dd>Tab / Shift + Tab</dd></div><div><dt>关闭弹层</dt><dd>Esc</dd></div></dl>
+          <button className="btn" onClick={() => shortcutsRef.current?.close()}>关闭快捷键</button>
+        </div>
+      </dialog>
+      <dialog className="command-palette" ref={paletteRef} aria-label="搜索页面与操作" onClick={event => { if (event.target === event.currentTarget) paletteRef.current?.close(); }}>
+        <div className="command-inner">
+          <div className="command-search"><input aria-label="搜索命令" placeholder="搜索页面与当前页操作" value={commandQuery} onChange={e => setCommandQuery(e.target.value)} onKeyDown={e => {
+            if (e.key === "Enter" && !e.nativeEvent.isComposing) { const command = commands.find(c => c.label.toLowerCase().includes(commandQuery.toLowerCase())); if (command) { e.preventDefault(); paletteRef.current?.close(); command.run(); } }
+          }} /><button className="icon-btn" aria-label="关闭命令搜索" onClick={() => paletteRef.current?.close()}><Icon name="x" size={14} /></button></div>
+          <div className="command-results">{commands.filter(c => c.label.toLowerCase().includes(commandQuery.toLowerCase())).map(c => <button key={c.label} onClick={() => { paletteRef.current?.close(); c.run(); }}>{c.label}</button>)}{!commands.some(c => c.label.toLowerCase().includes(commandQuery.toLowerCase())) && <p>没有匹配的操作</p>}</div>
+          <p className="command-help">⌘/Ctrl+K 搜索 · ⌘/Ctrl+B 导航 · Esc 关闭</p>
+        </div>
+      </dialog>
     </div>
   );
 }

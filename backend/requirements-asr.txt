@@ -1,3 +1,14 @@
+# ASR / 推理侧完整依赖锁定清单（从已验证的生产环境导出）
+#
+# backend/requirements.txt 只含 Web 层，跑不起 ASR，部署一定要用本文件。
+#
+# torch / torchaudio 说明：
+#   - macOS(arm64)：PyPI 轮子即 CPU/MPS 版，直接 pip install 即可。
+#   - Linux(x86_64)：PyPI 的 torch==2.12.0 轮子自带 CUDA 13.0.2 运行时
+#     （依赖 cuda-toolkit==13.0.2 / nvidia-cudnn-cu13），要求 NVIDIA 驱动 >= 580。
+#     不要加 --index-url .../whl/cpu，那会装成 CPU 版。
+#
+# 详见 部署说明-Ubuntu-GPU.md
 addict==2.4.0
 aiohappyeyeballs==2.6.2
 aiohttp==3.14.1

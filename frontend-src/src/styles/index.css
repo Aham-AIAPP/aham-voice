@@ -1,25 +1,35 @@
 /* =============================================================================
-   AhamVoice — global stylesheet
-   Loads the official Aham UI v5.1 sheet + app foundation tokens + element type
-   + self-authored business components. No Tailwind: the app uses official
-   class names and CSS variables exclusively (0 atomic utility classes).
-   Order is significant: official tokens/components → foundation tokens →
-   element type → voice components.
+   NewVoice — global stylesheet
+   Loads the Aham Design System foundation + Aham Core component bundle.
+   Order is significant: tokens → element type → component CSS.
+   Tailwind v4 is mounted via @tailwindcss/vite; design tokens become utility
+   variables thanks to tailwind.theme.css.
    ============================================================================= */
 
-/* Official Aham UI v5.1 — the single source of truth for component styles AND
-   the :root color tokens (light + dark via [data-theme="dark"]). */
-@import "./aham-ui.css";
-/* Foundation tokens the official sheet doesn't ship: spacing scale, container
-   widths, shell dimensions, z-index ladder, icon sizes, motion. */
+@import "tailwindcss";
 @import "./design-tokens.css";
-/* Element-level type defaults (headings, prose, lists, code, tables) on the
-   official tokens — official CSS only styles <body>. */
+@import "./tailwind.theme.css";
 @import "./colors_and_type.css";
-/* App-level self-authored business components: app-shell brand/account, auth
-   shell, audio player, per-sentence transcript, speaker editor, timeline,
-   markdown — all built on the official token set. */
-@import "./components-voice.css";
+
+/* Aham Core (AI-CRM) bundle — every component file the product uses. Order
+   between the six is not significant once tokens + element type are in. */
+@import "./components-shell.css";
+@import "./components-identity.css";
+@import "./components-ai.css";
+@import "./components-business.css";
+@import "./components-ops.css";
+@import "./components-conversation.css";
+@import "./components-modal.css";
+
+/* App-level back-fills: .btn, .icon-btn, .menu, .markdown, filter-bar
+   search-icon, KPI metric — primitives the design system documents but
+   doesn't ship in shared CSS. */
+@import "./app-extras.css";
+
+/* 原子工具类 —— 最后导入，确保同属性下盖过组件类（复刻原内联 style 的优先级）。 */
+@import "./utilities.css";
+@import "./aham/tokens.css";
+@import "./aham-adapter.css";
 
 /* App-shell viewport: the body holds the grid, full height, no scroll on the
    root — the body region inside .app-shell handles its own scrolling. */
@@ -44,13 +54,13 @@ body {
   overflow: hidden;
 }
 .skip-link:focus {
-  left: var(--s4);
-  top: var(--s4);
+  left: var(--space-4);
+  top: var(--space-4);
   width: auto;
   height: auto;
-  padding: var(--s2) var(--s3);
-  background: var(--white);
-  border: 1px solid var(--line);
-  border-radius: var(--r-sm);
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
   z-index: var(--z-skip);
 }

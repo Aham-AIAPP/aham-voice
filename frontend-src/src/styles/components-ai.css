@@ -1,0 +1,386 @@
+/* =============================================================================
+   Aham Design System · AI-native patterns (v2 additions)
+   -----------------------------------------------------------------------------
+   Tier 1 anchor components for AI-native product surfaces.
+
+     1. .confirm-card        AI extraction → user confirmation → write-through
+     2. .prov                Provenance + confidence inline mark
+     3. .workspace-dock      Global AI work entry point (3 modes)
+     4. .relation-picker     Cross-type object association selector
+
+   Load AFTER design-tokens.css and colors_and_type.css. No new tokens —
+   everything reads from the existing token surface.
+   ============================================================================= */
+
+
+/* =============================================================================
+   1. CONFIRM CARD — the AI write-through unit
+   -----------------------------------------------------------------------------
+   The single official shape for "AI extracted these fields, confirm to write".
+   Used everywhere a write goes through user judgement: follow-up extraction,
+   status transition, lead → customer conversion, briefing field correction,
+   any local-or-Kingdee write.
+
+   States:
+     default        (no class)         pending user confirmation
+     .is-writing                       confirm clicked, request in flight
+     .is-success                       written; card collapses to one-line stub
+     .has-error                        write failed; diagnostic row at top
+     .confirm-card--chained            visually attaches to a previous card
+                                       (used for lead → customer → opportunity)
+   ============================================================================= */
+
+.confirm-card {
+  --cc-radius: var(--radius-lg);
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-canvas);
+  border: 1px solid var(--border-default);
+  border-radius: var(--cc-radius);
+  box-shadow: var(--shadow-sm);
+  max-width: 64ch;
+  overflow: hidden;
+  transition:
+    border-color var(--duration-base) var(--ease-standard),
+    background   var(--duration-base) var(--ease-standard),
+    opacity      var(--duration-base) var(--ease-standard);
+}
+
+
+/* =============================================================================
+   2. PROVENANCE MARK — where did this value come from, how confident
+   -----------------------------------------------------------------------------
+   Inline, plain-text marker. Five sources only. Three confidence levels
+   (high is silent — the absence of a confidence note means "trustworthy").
+
+   Sources (data-source):  kingdee · local · bocha · llm · user
+   Confidence:             high (silent) · medium ("中") · low ("低" + warning fg)
+
+   Visual rules:
+     · Always plain text, never a colored chip background.
+     · Source token uses --fg-subtle; confidence "低" uses --warning-fg text only.
+     · Mono font keeps it compact and distinguishable from prose.
+     · Hover reveals evidence tooltip via the native title attribute.
+   ============================================================================= */
+
+.prov {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-regular);
+  color: var(--fg-subtle);
+  white-space: nowrap;
+  letter-spacing: 0;
+  line-height: 1;
+  cursor: help;
+}
+.prov::before {
+  content: "";
+  display: inline-block;
+  width: 5px; height: 5px;
+  border-radius: 999px;
+  background: var(--fg-faint);
+  flex: none;
+  align-self: center;
+}
+
+.prov[data-source="kingdee"]::before { background: var(--accent-default); }
+.prov[data-source="local"]::before   { background: var(--fg-muted); }
+.prov[data-source="bocha"]::before   { background: var(--info-fg); }
+.prov[data-source="llm"]::before     { background: var(--fg-faint); }
+.prov[data-source="user"]::before    { background: var(--success-fg); }
+
+/* Confidence — appended inside the same span. "中"/"低" only; "高" is silent */
+.prov__conf {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--fg-subtle);
+}
+.prov__conf--low { color: var(--warning-fg); }
+
+
+/* =============================================================================
+   3. WORKSPACE DOCK — global AI work entry point
+   -----------------------------------------------------------------------------
+   The single official shell for the AI work entry. Three modes only.
+
+     data-mode="dock"   bottom strip, 56px collapsed, expands on focus
+     data-mode="panel"  right-side persistent panel (~480px)
+     data-mode="focus"  full-takeover for a single deep task
+
+   Always carries:
+     · Optional .dock__context badge ("当前：南都电源 · 线索")
+     · A .composer (the existing one)
+     · Optional .dock__pending stub showing the user has unconfirmed cards
+     · Optional .dock__diag one-liner for current external-API failure
+   ============================================================================= */
+
+.workspace-dock {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-canvas);
+  border: 1px solid var(--border-default);
+  box-shadow: var(--shadow-md);
+  font-family: var(--font-sans);
+}
+
+.workspace-dock[data-mode="dock"] {
+  border-radius: var(--radius-lg);
+  /* In production: position: fixed; bottom: 16px; left: 50%;
+                   transform: translateX(-50%); width: min(720px, 92vw); */
+}
+.workspace-dock[data-mode="panel"] {
+  border-radius: var(--radius-lg);
+  height: 540px;
+  width: 480px;
+  /* In production: position: fixed; right: 16px; top: 64px; bottom: 16px;
+                   width: 480px; */
+}
+.workspace-dock[data-mode="focus"] {
+  border-radius: var(--radius-xl);
+  /* In production: position: fixed; inset: 32px; box-shadow: var(--shadow-xl); */
+}
+
+/* --- context badge ----------------------------------------------------- */
+.dock__context {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border-default);
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+  border-top-left-radius: inherit;
+  border-top-right-radius: inherit;
+}
+.dock__context-label {
+  color: var(--fg-subtle);
+}
+.dock__context-target {
+  color: var(--fg-default);
+  font-weight: var(--weight-medium);
+}
+.dock__context-target .type {
+  color: var(--fg-subtle);
+  font-weight: var(--weight-regular);
+  margin-left: var(--space-2);
+}
+.dock__unbind {
+  margin-left: auto;
+  background: transparent;
+  border: 0;
+  padding: 4px 8px;
+  font-family: inherit;
+  font-size: var(--text-xs);
+  color: var(--fg-subtle);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+.dock__unbind:hover { background: var(--fill-subtle); color: var(--fg-default); }
+
+/* --- body — composer fits inside ------------------------------------- */
+.dock__body {
+  padding: var(--space-3) var(--space-4) var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-height: 0;
+  flex: 1;
+}
+.workspace-dock[data-mode="panel"] .dock__body,
+.workspace-dock[data-mode="focus"] .dock__body {
+  overflow: auto;
+}
+.workspace-dock .composer {
+  /* In dock mode, no outer card — borders come from the dock shell */
+  border: 0;
+  background: transparent;
+  padding: 0;
+}
+.workspace-dock[data-mode="dock"] .composer {
+  border: 1px solid var(--border-default);
+  background: var(--bg-canvas);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+}
+
+/* --- pending stub — surfaces unconfirmed cards from earlier --------- */
+.dock__pending {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--accent-soft);
+  border-radius: var(--radius-md);
+  font-size: var(--text-xs);
+  color: var(--fg-default);
+}
+.dock__pending .count {
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--weight-medium);
+}
+.dock__pending .open {
+  margin-left: auto;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  font-size: var(--text-xs);
+  color: var(--accent-default);
+  cursor: pointer;
+}
+.dock__pending .open:hover { text-decoration: underline; }
+
+/* --- diagnostic one-liner --------------------------------------------- */
+.dock__diag {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-left: 2px solid var(--danger-fg);
+  background: var(--danger-bg);
+  font-size: var(--text-xs);
+  color: var(--fg-default);
+  line-height: var(--leading-relaxed);
+}
+.dock__diag .code {
+  font-family: var(--font-mono);
+  color: var(--danger-fg);
+}
+.dock__diag .retry {
+  margin-left: auto;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  font-size: var(--text-xs);
+  color: var(--fg-default);
+  text-decoration: underline;
+  text-decoration-color: var(--fg-subtle);
+  cursor: pointer;
+}
+
+
+/* =============================================================================
+   4. RELATION PICKER — cross-type object association selector
+   -----------------------------------------------------------------------------
+   The single official picker for binding an artifact (recording / minute /
+   briefing / quote) to one or more business objects across types.
+
+   Object types it spans: LEAD · CUSTOMER · OPPORTUNITY · INTERNAL_NONE.
+   Hosted in three placements: drawer, modal, inline (data-host attr).
+   ============================================================================= */
+
+.relation-picker {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  background: var(--bg-canvas);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  padding: var(--space-5);
+  max-width: 560px;
+}
+
+
+/* =============================================================================
+   v2.3 ADDITIONS — runtime states for the dock + .action-tile
+   -----------------------------------------------------------------------------
+   These extend the v2 anchors without changing them:
+     · .workspace-dock[data-mode="dock"].is-resting    default ambient state
+     · .workspace-dock[data-mode="dock"].is-composing  textarea focused/typing
+     · .action-tile                                    /work landing verb cards
+
+   See README v2.3 for the rules. CSS here enforces the *floor* (sizes,
+   visibility); it does not enforce the page × default-mode matrix — that's
+   the host's job.
+   ============================================================================= */
+
+
+/* --- dock runtime states ---------------------------------------------- */
+
+/* Resting (default). Compact. No starter prompts. No diagnostic unless
+   the host explicitly renders one. */
+.workspace-dock[data-mode="dock"].is-resting {
+  padding: 0;
+}
+.workspace-dock[data-mode="dock"].is-resting .dock__body {
+  padding: var(--space-2) var(--space-3);
+  gap: var(--space-2);
+}
+.workspace-dock[data-mode="dock"].is-resting .starter-prompts,
+.workspace-dock[data-mode="dock"].is-resting .attachment-row {
+  display: none;
+}
+.workspace-dock[data-mode="dock"].is-resting .composer {
+  /* In resting mode the composer is the only visible chrome — keep it tight */
+  padding: var(--space-2) var(--space-3);
+}
+
+/* Composing. Textarea focused or has content. Starter prompts may appear
+   (host decides — only when textarea is empty). Attachment row appears when
+   files are queued. */
+.workspace-dock[data-mode="dock"].is-composing .dock__body {
+  padding: var(--space-3) var(--space-4) var(--space-4);
+}
+.workspace-dock[data-mode="dock"].is-composing .composer {
+  /* Composing border picks up a hair more contrast — feels "live" without
+     advertising anything */
+  border-color: var(--border-strong);
+}
+
+/* Width — the v2.3 official answer: 720px centered floating island.
+   Pages that need a different width must override locally and document it. */
+.workspace-dock[data-mode="dock"] {
+  width: min(720px, 92vw);
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/* Forbidden chrome — kill switches. These selectors target the three
+   labels v2.3 explicitly bans, so a developer who reaches for them gets
+   nothing on screen. (The rule is "don't write the label"; this is the
+   safety net.) */
+.composer + .composer-label,
+.composer + .composer-hint,
+.workspace-dock .composer-label,
+.workspace-dock .composer-hint,
+.workspace-dock .composer-kbd-hint,
+.workspace-dock .composer-provider {
+  display: none !important;
+}
+
+
+/* =============================================================================
+   ACTION TILE — /work landing verb cards (v2.3)
+   -----------------------------------------------------------------------------
+   Small, fixed set of "verb" tiles that frame what the workspace can do.
+   Not a generic dashboard card. No icons. Max three lines of copy.
+
+   Structure:
+     <a class="action-tile" href="…">
+       <h3 class="action-tile__title">信息预查询</h3>
+       <p class="action-tile__body">…</p>
+       <p class="action-tile__meta">例如：浙江南都电源股份有限公司</p>
+     </a>
+
+   States:
+     default                   interactive
+     [aria-disabled="true"]    .is-disabled — locked / coming soon
+     :hover                    hairline strengthens, no shadow
+   ============================================================================= */
+
+.action-tile-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-4);
+}
+
+/* Icon density floor — action tiles never get icons inside, even if a
+   developer is tempted. The rule says "no icon"; the CSS enforces it. */
+.action-tile :is(svg, .icon, [class*="lucide-"]) {
+  display: none !important;
+}

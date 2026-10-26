@@ -1,0 +1,775 @@
+/* =============================================================================
+   NewVoice — extras on top of the Aham Design System.
+   The design system ships tokens + structural components, but a few primitives
+   that the README documents (.btn, .icon-btn, .menu, .markdown) live as inline
+   demo styles instead of shared CSS. We back-fill them here so React
+   components have stable classes to lean on.
+   Token vocabulary is unchanged — colors/spaces/radii all reference the
+   design-system variables.
+   ============================================================================= */
+
+/* ---------- Button ---------------------------------------------------------
+   Five variants × six states, per README. Default 36px · sm 28 · lg 44.
+*/
+.btn {
+  --btn-h: 36px;
+  --btn-px: var(--space-4);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  height: var(--btn-h);
+  padding: 0 var(--btn-px);
+  font-family: inherit;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  line-height: 1;
+  color: var(--fg-default);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background var(--duration-fast) var(--ease-standard),
+    color      var(--duration-fast) var(--ease-standard),
+    border     var(--duration-fast) var(--ease-standard),
+    transform  var(--duration-instant) var(--ease-standard);
+  text-decoration: none;
+}
+.btn:focus-visible {
+  outline: 2px solid var(--accent-default);
+  outline-offset: 2px;
+}
+.btn:active { transform: scale(0.985); }
+.btn:disabled,
+.btn[aria-disabled="true"] { opacity: 0.45; cursor: not-allowed; }
+
+.btn--sm { --btn-h: 28px; --btn-px: var(--space-3); font-size: var(--text-xs); }
+.btn--lg { --btn-h: 44px; --btn-px: var(--space-5); font-size: var(--text-base); }
+
+.btn--primary {
+  background: var(--accent-default);
+  color: var(--accent-fg);
+  border-color: var(--accent-default);
+}
+.btn--primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+.btn--secondary {
+  background: var(--bg-surface);
+  color: var(--fg-default);
+  border-color: var(--border-strong);
+}
+.btn--secondary:hover:not(:disabled) {
+  background: var(--fill-subtle);
+}
+
+.btn--ghost {
+  background: transparent;
+  color: var(--fg-default);
+}
+.btn--ghost:hover:not(:disabled) {
+  background: var(--fill-subtle);
+}
+
+.btn--danger {
+  background: var(--danger-fg);
+  color: var(--paper-50);
+  border-color: var(--danger-fg);
+}
+.btn--danger:hover:not(:disabled) {
+  filter: brightness(0.95);
+}
+
+.btn--loading {
+  position: relative;
+  color: transparent !important;
+  pointer-events: none;
+}
+.btn--loading::after {
+  content: "";
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  color: var(--accent-fg);
+  animation: newvoice-spin 700ms linear infinite;
+}
+.btn--ghost.btn--loading::after,
+.btn--secondary.btn--loading::after { color: var(--fg-default); }
+
+/* ---------- Field (input / textarea / select) ------------------------------
+   The design system's README documents `.field` extensively (six states via
+   data-state, --secret variant, field-wrap with trailing affordance), but
+   the shipped CSS files don't define it — every demo HTML inlines its own
+   field styles. We supply the canonical surface here so forms render with
+   the documented look (bordered, paper background, accent focus ring).
+*/
+.field {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  width: 100%;
+  min-height: 32px;
+  padding: 6px 10px;
+  background: var(--bg-canvas);
+  color: var(--fg-default);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-size: var(--text-sm);
+  line-height: var(--leading-snug);
+  transition:
+    border-color var(--duration-fast) var(--ease-standard),
+    box-shadow   var(--duration-fast) var(--ease-standard),
+    background   var(--duration-fast) var(--ease-standard);
+}
+textarea.field {
+  display: block;
+  min-height: 96px;
+  resize: vertical;
+  line-height: var(--leading-relaxed);
+}
+select.field {
+  cursor: pointer;
+  padding-right: 28px;
+  background-image: linear-gradient(45deg, transparent 50%, var(--fg-muted) 50%),
+                    linear-gradient(135deg, var(--fg-muted) 50%, transparent 50%);
+  background-position: calc(100% - 14px) 14px, calc(100% - 10px) 14px;
+  background-size: 4px 4px, 4px 4px;
+  background-repeat: no-repeat;
+}
+.field::placeholder,
+textarea.field::placeholder { color: var(--fg-faint); }
+.field:hover { border-color: var(--fg-muted); }
+.field:focus,
+.field:focus-visible {
+  outline: none;
+  border-color: var(--accent-default);
+  box-shadow: 0 0 0 3px var(--ring);
+}
+.field:disabled {
+  background: var(--bg-panel);
+  color: var(--fg-faint);
+  cursor: not-allowed;
+}
+.field[data-state="error"],
+.form-row.has-error .field { border-color: var(--danger-fg); }
+.field[data-state="error"]:focus,
+.form-row.has-error .field:focus {
+  box-shadow: 0 0 0 3px oklch(0.595 0.180 28 / 0.18);
+}
+
+/* Native HTML5 checkbox + radio: keep them visible (browsers strip them by
+   default when global resets touch <input>). */
+input[type="checkbox"],
+input[type="radio"] {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  cursor: pointer;
+  accent-color: var(--accent-default);
+}
+
+/* ---------- Icon-only button ------------------------------------------------
+   28×28 default. Used for row actions, topbar utils, close buttons.
+   Always paired with aria-label per Aham icon rule #2.
+*/
+.icon-btn {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--fg-muted);
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-standard), color var(--duration-fast) var(--ease-standard);
+}
+.icon-btn:hover { background: var(--fill-muted); color: var(--fg-default); }
+.icon-btn:focus-visible { outline: 2px solid var(--accent-default); outline-offset: 2px; }
+.icon-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* Topbar utility cluster icon buttons share the look. */
+.app-shell__topbar-utils > button {
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.app-shell__topbar-utils > button:hover { background: var(--fill-subtle); color: var(--fg-default); }
+
+/* ---------- Filter bar search icon -----------------------------------------
+   The README demos pin a Lucide search glyph inside .filter-bar__search next
+   to the input. The class isn't in the shipped CSS — wire it up here.
+*/
+.filter-bar__search {
+  position: relative;
+}
+.filter-bar__search > input {
+  width: 100%;
+  height: 32px;
+  padding: 0 var(--space-3) 0 calc(var(--space-3) + 18px);
+  font: inherit;
+  font-size: var(--text-sm);
+  color: var(--fg-default);
+  background: var(--bg-canvas);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+}
+.filter-bar__search > input:focus-visible {
+  outline: 2px solid var(--accent-default);
+  outline-offset: 1px;
+  border-color: transparent;
+}
+.filter-bar__search-icon {
+  position: absolute;
+  left: var(--space-3);
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--fg-subtle);
+  pointer-events: none;
+}
+
+/* Bare <button> children of .filter-bar__segments should still look like
+   segmented tabs even if the React side forgets to add .filter-bar__seg. */
+.filter-bar__segments > button {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  padding: 5px 12px;
+  font: inherit;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  color: var(--fg-muted);
+  border-radius: calc(var(--radius-md) - 2px);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.filter-bar__segments > button[aria-selected="true"],
+.filter-bar__segments > button.is-active {
+  background: var(--bg-canvas);
+  color: var(--fg-default);
+  box-shadow: var(--shadow-xs);
+}
+
+/* Filter-bar dropdowns/sorts use the .field look. */
+.filter-bar select,
+.filter-bar__sort {
+  height: 32px;
+  padding: 0 var(--space-3);
+  font: inherit;
+  font-size: var(--text-sm);
+  background: var(--bg-canvas);
+  color: var(--fg-default);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.filter-bar select:hover,
+.filter-bar__sort:hover { border-color: var(--border-strong); }
+
+/* ---------- Menu / dropdown ------------------------------------------------- */
+.menu {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.menu-item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-sm);
+  color: var(--fg-default);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+}
+.menu-item:hover { background: var(--fill-subtle); }
+.menu-item:disabled { color: var(--fg-faint); cursor: not-allowed; }
+
+/* ---------- Markdown article (rendered summary) ----------------------------
+   Source Serif italic is reserved for one moment per surface per Aham. The
+   summary body is the right place — H1/H2/H3 stay sans, italics inside body
+   pick up Source Serif.
+*/
+.markdown {
+  font-size: var(--text-md);
+  line-height: var(--leading-relaxed);
+  color: var(--fg-default);
+}
+.markdown h1, .markdown h2, .markdown h3, .markdown h4 {
+  font-family: var(--font-sans);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-snug);
+  margin: var(--space-6) 0 var(--space-2);
+}
+.markdown h1 { font-size: var(--text-2xl); margin-top: 0; }
+.markdown h2 { font-size: var(--text-xl); }
+.markdown h3 { font-size: var(--text-lg); }
+.markdown h4 { font-size: var(--text-base); }
+.markdown p, .markdown ul, .markdown ol { margin: var(--space-3) 0; }
+.markdown ul, .markdown ol { padding-left: var(--space-6); }
+.markdown li { margin: var(--space-1) 0; }
+.markdown strong { font-weight: var(--weight-semibold); color: var(--fg-default); }
+/* 强调用语义斜体即可，不切衬线（Aham 铁律：单一无衬线，禁衬线）。 */
+.markdown em {
+  font-style: italic;
+  color: var(--fg-default);
+}
+.markdown code {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  background: var(--bg-sunken);
+  padding: 1px 4px;
+  border-radius: var(--radius-xs);
+}
+.markdown pre {
+  background: var(--bg-sunken);
+  padding: var(--space-3);
+  border-radius: var(--radius-sm);
+  overflow: auto;
+}
+.markdown blockquote {
+  border-left: 2px solid var(--border-default);
+  padding-left: var(--space-3);
+  margin: var(--space-3) 0;
+  color: var(--fg-muted);
+}
+.markdown hr {
+  border: 0;
+  border-top: 1px solid var(--border-default);
+  margin: var(--space-6) 0;
+}
+/* 表格只横线、表头靠字重不靠底色（Aham 铁律：无竖线、无整行底色）。 */
+.markdown table { border-collapse: collapse; width: 100%; margin: var(--space-3) 0; }
+.markdown th, .markdown td {
+  text-align: left;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border-default);
+  font-size: var(--text-sm);
+}
+.markdown th { font-weight: var(--weight-semibold); }
+
+/* ---------- Metric KPI tile ------------------------------------------------- */
+.metric {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-4) var(--space-5);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  background: var(--bg-surface);
+}
+.metric__label {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+  color: var(--fg-subtle);
+}
+.metric__value {
+  font-size: var(--text-3xl);
+  font-weight: var(--weight-semibold);
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-default);
+  letter-spacing: -0.015em;
+}
+.metric__delta {
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+}
+
+/* ---------- Page template + body collapsed onto one element ----------------
+   The design system uses descendant selectors (`.page--landing .page-body`).
+   We collapse both classes onto the same element (cleaner React markup), so
+   re-emit the modifier rules with combined selectors.
+*/
+.page-body.page--landing {
+  width: min(880px, 100% - 2 * var(--space-10));
+}
+.page-body.page--object-index,
+.page-body.page--object-detail {
+  width: var(--container-page);
+}
+.page-body.page--landing .page-head__title {
+  font-size: var(--text-2xl);
+  font-weight: var(--weight-medium);
+}
+.page-body.page--landing .page-head { grid-template-areas: "title actions"; }
+.page-body.page--landing .page-head__subtitle { display: none; }
+
+/* ---------- NewVoice timeline (replaces .timeline) -------------------------
+   The design system's `.timeline` uses a pseudo-element dot with absolute
+   positioning, which never reliably aligns with the title baseline across
+   different event shapes (some events have detail panels, some don't,
+   single-line titles vs wrapped). We use a real DOM dot inside a grid row
+   so it always sits next to the title at the right vertical position.
+*/
+.nv-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.nv-timeline__item {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  column-gap: var(--space-3);
+  position: relative;
+}
+.nv-timeline__rail {
+  position: relative;
+  display: flex;
+  justify-content: center;
+}
+.nv-timeline__dot {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  margin-top: 6px;
+  border-radius: 999px;
+  background: var(--bg-canvas);
+  border: 1.5px solid var(--fg-muted);
+  z-index: 1;
+}
+.nv-timeline__item--moss   .nv-timeline__dot { border-color: var(--success-fg); }
+.nv-timeline__item--rust   .nv-timeline__dot { border-color: var(--danger-fg);  }
+.nv-timeline__item--accent .nv-timeline__dot { background: var(--accent-default); border-color: var(--accent-default); }
+.nv-timeline__item--amber  .nv-timeline__dot { border-color: var(--warning-fg); }
+.nv-timeline__item:not(:last-child) .nv-timeline__rail::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 22px;
+  bottom: calc(-1 * var(--space-4));
+  width: 1px;
+  background: var(--border-default);
+  transform: translateX(-50%);
+}
+.nv-timeline__content { min-width: 0; }
+.nv-timeline__title {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--fg-default);
+  margin: 0;
+}
+.nv-timeline__when {
+  font-size: var(--text-xs);
+  color: var(--fg-subtle);
+  margin: 2px 0 0;
+}
+.nv-timeline__detail {
+  margin: var(--space-2) 0 0;
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg-panel);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+  line-height: var(--leading-relaxed);
+}
+
+/* ---------- App-shell height constraints -----------------------------------
+   Default `1fr` grid tracks resolve to `minmax(min-content, 1fr)` which lets
+   the row grow with content and breaks the 100vh constraint on .app-shell.
+   Force `minmax(0, 1fr)` + `min-height: 0` so the body row stays bounded.
+*/
+.app-shell {
+  /* Design system declares min-height: 100vh, which lets the shell grow with
+     content — that breaks any "fixed bottom dock" layout because the body
+     row simply expands instead of scrolling. Pin to exactly 100vh + minmax
+     row so the body region is bounded and its children can scroll. */
+  height: 100vh;
+  max-height: 100vh;
+  min-height: 0;
+  grid-template-rows: var(--shell-topbar-h) minmax(0, 1fr);
+}
+.app-shell__body {
+  min-height: 0;
+}
+.split-panel__main {
+  min-height: 0;
+}
+
+/* ---------- Split-panel template + ratios ----------------------------------
+   The design system's .page--split-panel defines `grid-template-columns` but
+   leaves rows as `auto`, which lets cells grow to content height — that
+   breaks any sticky / grid-auto-row layout inside the main column. Pin the
+   single row to 1fr so cells are exactly the viewport-bound height.
+*/
+.page--split-panel {
+  grid-template-rows: minmax(0, 1fr);
+}
+/* Default (no preview): rail collapsed to 0, main fills viewport.
+   Preview open: 50/50 so the markdown gets enough reading width. */
+.page--split-panel:not(:has(.split-panel__rail.is-closed)) {
+  grid-template-columns: minmax(0, 1fr) minmax(560px, 1fr);
+}
+.split-panel__rail.is-closed {
+  display: none;
+}
+
+/* ---------- Left-main layout: scroll region + fixed composer dock ----------
+   `.split-panel__main` originally has `overflow-y: auto` which made the entire
+   column scroll, breaking position:sticky on the composer. We turn the column
+   into a fixed-height grid with two rows: a scrollable content row (1fr) and
+   an auto-height composer dock at the bottom. The dock never moves.
+*/
+.split-panel__main.detail-main {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  height: 100%;
+  overflow: hidden;
+}
+.detail-main__scroll {
+  overflow-y: auto;
+  padding: var(--space-8) 0 var(--space-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  align-items: stretch;
+}
+/* Constrain children to the same readable column the list page uses, so the
+   detail view feels like a sibling of the list page — not a different layout.
+   When the preview rail opens (left column shrinks to ~813px), the formula
+   gracefully steps down to (column - 80px). */
+.detail-main__scroll > * {
+  width: var(--container-page);
+  margin-inline: auto;
+}
+.detail-composer-dock {
+  background: var(--bg-canvas);
+  border-top: 1px solid var(--border-default);
+  padding: var(--space-3) 0;
+  box-shadow: 0 -8px 16px -8px oklch(0 0 0 / 0.06);
+}
+.detail-composer-dock .composer {
+  width: var(--container-page);
+  margin: 0 auto;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  background: transparent;
+}
+
+/* ---------- Preview-window footer ------------------------------------------
+   The design system declares grid-template-areas: "header / body / footer"
+   for .preview-window, but doesn't style the footer slot. We use it for the
+   always-visible "改一下" composer at the bottom of the rail preview.
+*/
+.preview-window > footer {
+  grid-area: footer;
+  background: var(--bg-canvas);
+  border-top: 1px solid var(--border-default);
+}
+
+/* ---------- Stat tiles (热词 / 声纹 / 说话人) ---------------------------- */
+.stat-tile {
+  padding: var(--space-3) var(--space-4);
+  background: var(--bg-panel);
+  border-radius: var(--radius-md);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.stat-tile__label {
+  font-size: var(--text-xs);
+  color: var(--fg-subtle);
+}
+.stat-tile__value {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--fg-default);
+}
+.stat-tile__value.is-pending { color: var(--fg-muted); }
+
+/* ---------- Speaker card grid + per-card -----------------------------------
+   The "从当前录音指定声纹" card on the recording detail page renders speaker
+   candidates as a clickable grid that opens the drawer.
+*/
+.speaker-tile {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3) var(--space-4);
+  background: var(--bg-panel);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  transition: background var(--duration-fast) var(--ease-standard), border-color var(--duration-fast) var(--ease-standard);
+}
+.speaker-tile:hover { background: var(--fill-muted); border-color: var(--border-default); }
+.speaker-tile__title { font-weight: var(--weight-medium); }
+.speaker-tile__meta { font-size: var(--text-xs); color: var(--fg-subtle); font-variant-numeric: tabular-nums; }
+
+/* Drawer scrim + closer button positioning. .preview-drawer is fixed
+   right-50vw; we add a backdrop sibling. */
+.drawer-scrim {
+  position: fixed;
+  inset: 0;
+  background: var(--bg-overlay);
+  z-index: var(--z-modal);
+}
+.preview-drawer.newvoice-drawer {
+  z-index: calc(var(--z-modal) + 1);
+}
+
+
+/* ---------- Card --------------------------------------------------------- */
+/* Aham 铁律：卡片无边框、无静置/hover 阴影；用三层灰底差与白底内容区拉开层级，
+   交互卡 hover 用扁平灰反馈，不上阴影。 */
+.card {
+  background: var(--bg-panel);
+  border-radius: var(--radius-lg);
+  padding: var(--space-5);
+}
+.card[data-interactive] {
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-standard);
+}
+.card[data-interactive]:hover { background: var(--fill-muted); }
+
+/* ---------- Item-list polish (rows that the design system left bare) ------- */
+.item-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.item-list > li {
+  border-bottom: 1px solid var(--border-default);
+}
+.item-list > li:last-child { border-bottom: 0; }
+
+/* ---------- App-shell account avatar / menu trigger ------------------------ */
+.app-shell__account-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  background: var(--fill-muted);
+  color: var(--fg-muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  flex: none;
+}
+
+/* The brand mark used inside .auth-shell__brand. */
+.auth-shell__brand .brand-mark {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  background: var(--accent-default);
+  color: var(--accent-fg);
+  border-radius: 6px;
+  font-family: var(--font-sans);
+  font-style: normal;
+  font-weight: var(--weight-semibold);
+  align-items: center;
+  justify-content: center;
+}
+
+/* ---------- Composer recording state — local extension --------------------- */
+.composer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  background: var(--bg-canvas);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+}
+.composer:focus-within { border-color: var(--border-strong); }
+.composer textarea {
+  width: 100%;
+  border: 0;
+  resize: vertical;
+  font: inherit;
+  font-size: var(--text-sm);
+  color: var(--fg-default);
+  background: transparent;
+  outline: none;
+}
+.composer-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+.composer-tools {
+  display: inline-flex;
+  gap: var(--space-1);
+}
+.composer-tools > button {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.composer-tools > button:hover { background: var(--fill-subtle); color: var(--fg-default); }
+
+/* ── 由内联样式抽出的语义类（#14 整改，值与原内联逐字一致）────────────────── */
+/* 登录页用户名/密码提示框 */
+.auth-hint {
+  font-size: var(--text-xs);
+  color: var(--fg-subtle);
+  background: var(--bg-panel);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  margin-bottom: var(--space-4);
+  line-height: 1.7;
+}
+/* 侧栏账户下拉菜单定位（叠加在 .menu 之上）*/
+.shell-account-menu {
+  position: absolute;
+  bottom: calc(var(--shell-account-h) + var(--space-2));
+  left: var(--space-3);
+  right: var(--space-3);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  padding: var(--space-1);
+  z-index: var(--z-popover);
+}
+/* 行内小转圈（尺寸由 size prop 决定，保留内联）*/
+.nv-spinner {
+  display: inline-block;
+  border: 1.5px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: newvoice-spin 700ms linear infinite;
+  vertical-align: middle;
+}

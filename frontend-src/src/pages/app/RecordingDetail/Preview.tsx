@@ -1,15 +1,8 @@
-import { useMemo, useRef, useState } from "react";
+import { useMemo } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import {
-  exportEmotionUrl,
-  exportSummaryVersionUrl,
-  exportTranscriptUrl,
-  recordingAudioUrl,
-} from "@/api/endpoints";
+import { exportEmotionUrl, exportSummaryVersionUrl, exportTranscriptUrl } from "@/api/endpoints";
 import { Icon } from "@/components/Icon";
-import { AudioPlayer } from "@/components/voice/AudioPlayer";
-import { TranscriptView } from "@/components/voice/TranscriptView";
 import type { EmotionAnalysis, Summary, TranscriptSegment } from "@/api/types";
 
 export type ArtifactKey = string;
@@ -48,10 +41,6 @@ function transcriptMarkdown(segments: TranscriptSegment[]): string {
 }
 
 export function Preview({ recordingId, summaries, segments, emotion, selected, onSelect, onClose }: Props) {
-  // Playhead + seek coordination for the per-sentence transcript view.
-  const [currentSec, setCurrentSec] = useState(0);
-  const [seekReq, setSeekReq] = useState<{ sec: number; nonce: number } | null>(null);
-  const seekNonce = useRef(0);
   const currentSummary = useMemo(() => {
     if (!selected.startsWith("summary:")) return null;
     const id = selected.slice("summary:".length);
@@ -91,36 +80,18 @@ export function Preview({ recordingId, summaries, segments, emotion, selected, o
         ? emotion?.model ?? ""
         : "";
 
-  async function handleDownload() {
-    if (!downloadHref) return;
-    const filename = `${displayName || "导出"}.md`.replace(/[\\/:*?"<>|]/g, "_");
-    const api = (window as unknown as {
-      pywebview?: { api?: { save_file?: (u: string, f: string) => Promise<boolean> } };
-    }).pywebview?.api;
-    // Desktop (pywebview/WKWebView) has no <a download>; route through the native
-    // Save dialog. In a real browser (dev) fall back to a download link.
-    if (api?.save_file) {
-      await api.save_file(downloadHref, filename);
-      return;
-    }
-    const a = document.createElement("a");
-    a.href = downloadHref;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-  }
-
   return (
-    <div className="window window--flush">
-      <header className="window__bar">
-        <span className="ftype">MD</span>
-        <span className="window__title">{displayName}</span>
-        <span className="text-caption">{metaText}</span>
-        <div className="window__actions">
+    <div
+      className="preview-window pv-window-flush"
+    >
+      <header className="preview-header">
+        <span className="preview-type">MD</span>
+        <span className="preview-title">{displayName}</span>
+        <span className="preview-meta">{metaText}</span>
+        <div className="preview-actions">
           {summaries.length + (segments.length > 0 ? 1 : 0) + (emotion ? 1 : 0) > 1 && (
             <select
-              className="select select--sm"
+              className="field u-fs-xs pv-artifact-select"
               value={selected}
               onChange={(e) => onSelect(e.target.value)}
               aria-label="切换产物"
@@ -138,9 +109,9 @@ export function Preview({ recordingId, summaries, segments, emotion, selected, o
             </select>
           )}
           {downloadHref && (
-            <button type="button" onClick={handleDownload} className="icon-btn" aria-label="下载">
+            <a href={downloadHref} download className="icon-btn" aria-label="下载">
               <Icon name="download" size={14} />
-            </button>
+            </a>
           )}
           <button type="button" className="icon-btn" aria-label="关闭预览" onClick={onClose}>
             <Icon name="x" size={14} />
@@ -148,42 +119,11 @@ export function Preview({ recordingId, summaries, segments, emotion, selected, o
         </div>
       </header>
 
-      {isTranscript ? (
-        <>
-          <div
-            style={{
-              padding: "var(--s3) var(--s4)",
-              borderBottom: "1px solid var(--line)",
-              flex: "none",
-            }}
-          >
-            <AudioPlayer
-              src={recordingAudioUrl(recordingId)}
-              seed={recordingId}
-              ariaLabel="录音"
-              onTime={setCurrentSec}
-              seekRequest={seekReq}
-            />
-          </div>
-          <div className="window__body fill" style={{ padding: "var(--s2) var(--s3)" }}>
-            <TranscriptView
-              segments={segments}
-              currentSec={currentSec}
-              followPlayback
-              onSeek={(sec) => {
-                seekNonce.current += 1;
-                setSeekReq({ sec, nonce: seekNonce.current });
-              }}
-            />
-          </div>
-        </>
-      ) : (
-        <div className="window__body fill">
-          <article className="prose">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{markdown}</ReactMarkdown>
-          </article>
-        </div>
-      )}
+      <div className="preview-body">
+        <article className="preview-doc markdown">
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{markdown}</ReactMarkdown>
+        </article>
+      </div>
     </div>
   );
 }

@@ -1,0 +1,58 @@
+{
+  "_comment": "内部版种子数据模板。真实文件不入库（.gitignore 已排除），放在 $RECORDING_AI_HOME/internal_seed.json，或用 --seed 指定。字段含义见 scripts/seed_internal.py。不含密钥/密码/邮箱/手机号：密码由 NEWVOICE_INITIAL_PASSWORD 设定、首登强制改，邮箱按 <username>@orchisky.cn 合成。",
+  "users": [
+    {
+      "username": "administrator",
+      "name": "系统管理员",
+      "role": "admin",
+      "dept": "系统管理",
+      "team_id": null,
+      "managed_team_ids": []
+    },
+    {
+      "username": "sales.manager",
+      "name": "示例经理",
+      "role": "manager",
+      "dept": "销售部",
+      "team_id": null,
+      "managed_team_ids": []
+    },
+    {
+      "username": "sales.member",
+      "name": "示例成员",
+      "role": "member",
+      "dept": "销售部",
+      "team_id": null,
+      "managed_team_ids": []
+    }
+  ],
+  "hotwords": [
+    {
+      "word": "示例客户名",
+      "kind": "组织",
+      "scope": "部门共享",
+      "weight": 10,
+      "aliases": ["示例客户简称"],
+      "owner_username": null,
+      "team_id": null
+    },
+    {
+      "word": "示例产品名",
+      "kind": "产品",
+      "scope": "部门共享",
+      "weight": 9,
+      "aliases": [],
+      "owner_username": null,
+      "team_id": null
+    },
+    {
+      "word": "示例行业术语",
+      "kind": "术语",
+      "scope": "personal",
+      "weight": 8,
+      "aliases": [],
+      "owner_username": "sales.member",
+      "team_id": null
+    }
+  ]
+}

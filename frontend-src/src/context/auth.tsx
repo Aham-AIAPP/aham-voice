@@ -5,7 +5,7 @@ import {
   login as apiLogin,
   logout as apiLogout,
 } from "@/api/endpoints";
-import { onUnauthorized, setStoredToken } from "@/api/client";
+import { getStoredToken, onUnauthorized, setStoredToken } from "@/api/client";
 import type { User } from "@/api/types";
 
 interface AuthState {
@@ -27,13 +27,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<AuthState>({ user: null, loading: false, ready: false });
 
   const refresh = useCallback(async () => {
-    // Single-user desktop build: no login. The backend always resolves the one
-    // local user, so just fetch it on boot.
+    const token = getStoredToken();
+    if (!token) {
+      setState({ user: null, loading: false, ready: true });
+      return;
+    }
     setState((prev) => ({ ...prev, loading: true }));
     try {
       const user = await fetchMe();
       setState({ user, loading: false, ready: true });
     } catch {
+      setStoredToken(null);
       setState({ user: null, loading: false, ready: true });
     }
   }, []);

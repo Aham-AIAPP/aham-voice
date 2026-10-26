@@ -16,7 +16,7 @@ export function Tag({
 }) {
   return (
     <span className={cn("tag", className)}>
-      {dim && <span className="t-3">{dim}</span>}
+      {dim && <span className="dim">{dim}</span>}
       {children}
       {onClose && (
         <button

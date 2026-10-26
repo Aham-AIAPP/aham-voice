@@ -1,91 +1,70 @@
-# Aham Voice — 录音转写与会议纪要（macOS）
+# Orchisky Voice
 
-[![Release](https://img.shields.io/github/v/release/Aham-AIAPP/aham-voice?color=336EE8)](https://github.com/Aham-AIAPP/aham-voice/releases)
-[![License: MIT](https://img.shields.io/badge/License-MIT-336EE8.svg)](LICENSE)
-[![Design](https://img.shields.io/badge/Design-Aham%20UI%20v6.1-336EE8.svg)](https://github.com/Aham-AIAPP/aham-ui)
-[![Type](https://img.shields.io/badge/type-macOS%20App-336EE8.svg)](#)
-[![联系我](https://img.shields.io/badge/%E8%81%94%E7%B3%BB%E6%88%91-%E5%BE%AE%E4%BF%A1-336EE8.svg?logo=wechat&logoColor=white)](assets/wechat-qr.png)
+> **内部版** · 销售 / 项目会议录音处理：本地转写 → DeepSeek 纪要与情绪分析
+> Python FastAPI · FunASR · 说话人分离 · 前端 React 19 + Vite + Tailwind v4（Aham 设计系统）
 
-![Aham Voice — 录音转写与会议纪要](assets/social-preview.png)
+## 当前主线 · Aham UI 9.1 网页版
 
-## 为什么做
+`main` 已统一到经过验证的多用户网页版，包含录音库与纪要阅读精修、AI 改写预览后确认、钉钉同步及 OAuth MCP。界面和预构建资源对应 `ui/aham-9.1-content` 的 `82df197`，应用逻辑与该版本一致。
 
-录音转写工具不少，但多是网页服务：音频要上传到别人的服务器，转写完往往只给一段没分说话人、没结构的纯文本，纪要还得自己再整理。本地能离线跑的，又通常停在「出一段字」。
+- [界面截图与精修说明](docs/ui-9.1-refinement.md)
+- [前端运行、测试与设计基线](frontend-src/README.md)
+- [钉钉同步与 MCP 接入](docs/voice-dingtalk-mcp.md)
 
-Aham Voice 为此而做：把整条链路在一台 Mac 上接完整——转写、说话人分离、声学情绪全部本地离线，只有最后成稿的纪要才交给你自己的大模型，音频和数据不离开本机。
+旧单机桌面版保留在 [archive/desktop-main-20261026](https://github.com/Aham-AIAPP/aham-voice/tree/archive/desktop-main-20261026)（`49d6f30`），已有安装包对应旧桌面版。当前主线按下文的网页版部署说明运行；首次部署须包含配套的后端、MCP 和前端资源。两套提交历史均保留，原 MIT 许可继续保留。
 
-## 定位
+## 它做什么
 
-- **本地优先** — 转写（FunASR）、说话人分离（CAM++）、声学情绪（emotion2vec）全部本地离线，音频不上传。
-- **自行配置 LLM Key** — 纪要与情绪语义走云端大模型，用你自己的 OpenAI 兼容接口，Key 仅存本机。
-- **单机克制** — 无登录、无多用户、不联网同步；一个自包含的 macOS 应用，装上就能用。
-- **一体成稿** — 从录音到分说话人的逐句稿，再到结构化纪要，一条流水线走完。
+1. 本机跑 FunASR + 说话人分离，把录音转成带说话人的逐字稿；
+2. 云端调 DeepSeek 生成会议纪要、对话情绪分析。
 
-> 简言之：把「录音 → 纪要」做利落的单机 Mac 应用，隐私留本机，成稿交给你信任的模型。
+多用户：管理员 / 经理 / 成员三级；声纹、热词均支持个人 / 团队 / 全公司作用域。
 
-## 能做什么
+## 密钥与配置（都不入库）
 
-- **本地转写** — FunASR paraformer + VAD + 标点，离线出逐句稿。
-- **说话人分离** — CAM++ 声纹，逐句标注谁在说；声纹可管理。
-- **声学情绪** — emotion2vec 本地情绪标注。
-- **AI 会议纪要** — 云端大模型成稿，可按自然语言重写；附情绪语义分析。
-- **热词** — 「热词」页手动增删，或「导入 txt」批量导入；转写后会从稿子里挖出该加的词和疑似听错的专名，等你确认。
-- **接 AI 助手（可选）** — 内置 MCP 服务，Claude Desktop 等客户端可在本机驱动它：开始转写、读结果、为某次会议定制热词、管声纹。全程 127.0.0.1，见 [docs/MCP.md](docs/MCP.md)。
-- **单机** — 无登录、无多用户、不联网同步，配置只存本机。
+| 放哪 | 内容 | 是否进 git |
+|---|---|---|
+| 仓库根 `.env` | `DEEPSEEK_API_KEY`、`RECORDING_AI_HOME` | **否**（.gitignore）|
+| 数据目录 `config.json` | 大模型 Key / Base / Model（管理员在「系统配置」页填）| 否（在 BASE 目录，不在仓库）|
+| 数据目录 `app-data/newvoice.sqlite3` | 用户、录音、纪要、声纹、热词 | 否 |
+| 数据目录 `internal_seed.json` | 内部版种子：员工名 + 客户热词 | 否（.gitignore）|
 
-## 预览
+模板见 `.env.example`。**仓库内不含任何真实密钥 / 密码 / token。**
 
-<table>
-<tr>
-<td width="50%"><img src="assets/shots/detail.png" alt="录音详情"></td>
-<td width="50%"><img src="assets/shots/transcript.png" alt="逐句转写"></td>
-</tr>
-<tr>
-<td align="center"><sub>录音详情 · 波形播放器 · 说话人卡</sub></td>
-<td align="center"><sub>逐句转写 · 用形状区分说话人</sub></td>
-</tr>
-<tr>
-<td><img src="assets/shots/summary.png" alt="会议纪要"></td>
-<td><img src="assets/shots/library.png" alt="录音库"></td>
-</tr>
-<tr>
-<td align="center"><sub>AI 会议纪要</sub></td>
-<td align="center"><sub>录音库</sub></td>
-</tr>
-</table>
+## 内部版种子数据（真实用户名 + 热词库）
 
-## 开始使用
+真实**用户名**与**热词库**以种子文件形式换机 / 团队部署（不含密码 / 密钥 / 邮箱 / 手机号）。
+种子里是员工名和客户名，**不入版本库**——放数据目录，仓库里只留结构模板：
 
-仅 Apple Silicon。**安装包只在大版本发布**，中间的迭代只推代码——想用最新功能请从源码构建，见 [DEPLOY.md](DEPLOY.md)。
-
-现成的安装包是 [v2.0.0](https://github.com/Aham-AIAPP/aham-voice/releases/tag/v2.0.0)，模型内置、体积大，按 GitHub 单文件上限分卷上传，下载全部分卷后在同一目录合并：
+- `/internal_seed.json` —— 真实种子：7 个用户（administrator + 6 销售部成员）+ 约 3300 条热词（客户 / 产品 / 行业术语）。已在 `.gitignore` 排除。
+- `scripts/internal_seed.example.json` —— 结构模板（假数据），入库。
+- `scripts/seed_internal.py` —— 幂等导入：用户按 `username`、热词按 `(word, owner)` 去重，可反复运行。
+  查找顺序 `--seed <路径>` → `$INTERNAL_SEED_PATH` → `$RECORDING_AI_HOME/internal_seed.json`。
 
 ```bash
-cat AhamVoice-*.dmg.* > "Aham Voice.dmg"
+export RECORDING_AI_HOME=...                 # 指向数据目录（含 app-data/newvoice.sqlite3）
+python3 scripts/seed_internal.py --dry-run   # 预览
+python3 scripts/seed_internal.py             # 导入
 ```
 
-拖 Aham Voice 到「应用程序」→ 首次运行 `xattr -dr com.apple.quarantine "/Applications/Aham Voice.app"` 解除隔离 → 在「设置」填 OpenAI 兼容 API Key 即可。从源码构建 / 打包流程见 [DEPLOY.md](DEPLOY.md)。
+导入的用户密码统一为 `NEWVOICE_INITIAL_PASSWORD`（默认 `orchisky888888`），**首次登录强制改**；邮箱按 `<username>@orchisky.cn` 合成。
 
----
+## 部署要点
 
-## 更新记录
+- FunASR / modelscope / torch 体积大，单独建 venv；模型放 `$RECORDING_AI_HOME/models/`（5 个模型约 3.9G）。
+- 依赖分两层：`backend/requirements.txt` 只有 Web 层（fastapi/uvicorn 等 5 个包），
+  **推理侧完整锁定清单在 `backend/requirements-asr.txt`**（111 个包），部署必须用后者。
+- 后端 uvicorn :8000，前端静态服务 :5173。`frontend/dist` 已预构建入库，部署无需 Node。
+- 推理设备由 `NEWVOICE_ASR_DEVICE` 控制：默认 `cpu`；Linux + NVIDIA 设 `cuda:0`。
+- 部署文档：
+  - macOS 本机（launchd）→ [`部署说明-本机.md`](部署说明-本机.md)
+  - Ubuntu 22.04 + GPU（systemd）→ [`部署说明-Ubuntu-GPU.md`](部署说明-Ubuntu-GPU.md)
 
-[Releases](https://github.com/Aham-AIAPP/aham-voice/releases) · [CHANGELOG](CHANGELOG.md)（Keep a Changelog · SemVer） · [CONTRIBUTING](CONTRIBUTING.md) · [MIT](LICENSE)
+## 本次内部改造（2026-06）
 
-## 关于 Aham
+- **UI 全面对齐 Aham 设计系统 v6.1**：单蓝 `#336EE8`、三层灰、卡片无边框无阴影、去衬线；新增统一弹窗（`ConfirmDialog` / `VoiceprintEditModal`）+ 焦点陷阱。
+- **三功能对齐 aham-voice 开源版**（保留多用户作用域）：大模型配置（任意 OpenAI 兼容接口 + 测试连接）、热词（个人「、」分隔）、声纹（建/改/删 + 可见范围）。
+- **清死功能**：砍热词在线更新、任务进度、占位管理页、顶栏死按钮；删后端死路由 / 孤儿前端 API。
+- **代码质量**：内联样式抽成 token 原子工具层（`styles/utilities.css`，147→8 仅余动态值）；清死 CSS 约 1750 行（多 agent 审计 + 逐字回归核验）。
 
-> 把灵光一现，做成能用的 AI 工具。Aham 来自 *aha moment*，每个工具只把一件事做利落。
-
-| 应用 | 一句话 |
-|---|---|
-| [Aham UI](https://github.com/Aham-AIAPP/aham-ui) | 供 AI 消费的设计系统——写一次规范，AI 产出处处一致 |
-| [Aham Word](https://github.com/Aham-AIAPP/aham-word) | 供 AI 消费的 Word 规范——AI 据规范产出处处一致的 .docx |
-| [Aham Survey](https://github.com/Aham-AIAPP/aham-survey) | 现场调研工具（macOS）——本地优先，把现场对话做成结构化调研成果 |
-| **Aham Voice** | 录音转写与会议纪要（macOS）——本地离线转写，纪要走你自己的模型 |
-| [Aham PPT](https://github.com/Aham-AIAPP/aham-ppt) | 克制的 AI PPT 制作技能——把素材做成方案级 PPT |
-
-### 关注 · 交流
-
-公众号看更多 AI 工具实践与更新；也欢迎扫码加我，交流与反馈。
-
-<p><img src="assets/wechat-qr.png" width="640" alt="关注 Aham 公众号 / 加作者微信"></p>
+> 完整路由表见 `backend/app/main.py`（搜 `@app.` 装饰器）。

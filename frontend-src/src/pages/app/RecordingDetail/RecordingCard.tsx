@@ -1,6 +1,4 @@
 import { recordingAudioUrl } from "@/api/endpoints";
-import { AudioPlayer } from "@/components/voice/AudioPlayer";
-import { Status } from "@/components/Status";
 import type { Recording, TranscriptSegment, HotwordPackage } from "@/api/types";
 
 interface Props {
@@ -34,50 +32,46 @@ export function RecordingCard({ recording, segments, hotwordPackage }: Props) {
   const hotwordsEnabled = !!hotwordPackage && hotwordPackage.asr_terms_count > 0;
 
   return (
-    <section className="card stack-card">
-      <header className="row" style={{ flexWrap: "wrap", gap: "var(--s2)", alignItems: "baseline" }}>
-        <span className="ftype">录音</span>
-        <span style={{ fontSize: "var(--text-sm)", fontWeight: "var(--w-medium)" }}>{recording.filename}</span>
-        <span className="text-caption">{recording.duration_label}</span>
+    <section className="card u-flex u-col u-gap-3">
+      <header className="u-flex u-wrap u-gap-2 u-items-baseline">
+        <span className="u-mono u-fs-2xs u-fg-subtle u-caps">
+          录音
+        </span>
+        <span className="u-fs-sm u-fw-medium">{recording.filename}</span>
+        <span className="meta u-fs-xs u-fg-subtle">
+          {recording.meeting_type} · {recording.duration_label}
+        </span>
       </header>
 
-      <AudioPlayer
+      <audio
+        controls
+        preload="metadata"
         src={recordingAudioUrl(recording.id)}
-        seed={recording.id}
-        ariaLabel="录音"
+        className="u-w-full"
       />
 
-      <div
-        className="card-grid"
-        style={{
-          marginTop: "var(--s1)",
-          // Three compact tiles aligned to the start instead of stretching
-          // across a wide card (#50); a min tile width keeps them grouped.
-          gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
-          maxWidth: "480px",
-        }}
-      >
-        <div className="metric">
-          <span className="k">热词</span>
-          <Status tone={hotwordsEnabled ? "moss" : "muted"}>
+      <div className="u-grid u-gap-3 u-mt-1 rc-stat-grid">
+        <div className="stat-tile">
+          <span className="stat-tile__label">热词</span>
+          <span className={`stat-tile__value${hotwordsEnabled ? "" : " is-pending"}`}>
             {hotwordsEnabled ? `已启用 · ${hotwordPackage!.asr_terms_count} 条` : "暂未启用"}
-          </Status>
+          </span>
         </div>
-        <div className="metric">
-          <span className="k">声纹</span>
-          <Status tone={voiceprintMatched > 0 ? "moss" : "muted"}>
+        <div className="stat-tile">
+          <span className="stat-tile__label">声纹</span>
+          <span className={`stat-tile__value${voiceprintMatched > 0 ? "" : " is-pending"}`}>
             {speakerTotal === 0
               ? "—"
               : voiceprintMatched > 0
                 ? `已匹配 ${voiceprintMatched}/${speakerTotal}`
                 : "待匹配"}
-          </Status>
+          </span>
         </div>
-        <div className="metric">
-          <span className="k">说话人</span>
-          <Status tone={speakerTotal > 0 ? "moss" : "muted"}>
+        <div className="stat-tile">
+          <span className="stat-tile__label">说话人</span>
+          <span className={`stat-tile__value${speakerTotal > 0 ? "" : " is-pending"}`}>
             {speakerTotal > 0 ? `${speakerTotal} 位` : "—"}
-          </Status>
+          </span>
         </div>
       </div>
     </section>

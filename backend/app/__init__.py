@@ -1,1 +1,1 @@
-"""AhamVoice backend package."""
+"""NewVoice backend package."""

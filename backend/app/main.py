@@ -13,7 +13,6 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
-import logging
 import threading
 import time
 import uuid
@@ -27,9 +26,6 @@ import httpx
 from fastapi import BackgroundTasks, Body, Depends, FastAPI, File, Form, Header, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, PlainTextResponse
-from fastapi.staticfiles import StaticFiles
-
-from . import models_hub
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -57,48 +53,42 @@ def load_env_file(path: Path) -> None:
 load_env_file(ROOT / ".env.local")
 load_env_file(ROOT / ".env")
 
-def _default_base() -> Path:
-    # Per-user writable data dir (DB, recordings, config.json). Overridable
-    # via RECORDING_AI_HOME.
-    if sys.platform == "darwin":
-        return Path.home() / "Library" / "Application Support" / "AhamVoice"
-    return Path.home() / ".cache" / "recording-ai"
-
-
-BASE = Path(os.environ.get("RECORDING_AI_HOME") or _default_base())
+BASE = Path(os.environ.get("RECORDING_AI_HOME", Path.home() / ".cache" / "recording-ai"))
 APP_DATA = BASE / "app-data"
-DB_PATH = APP_DATA / "ahamvoice.sqlite3"
+DB_PATH = APP_DATA / "newvoice.sqlite3"
 RECORDINGS = APP_DATA / "recordings"
 EXPORTS = APP_DATA / "exports"
 TMP = APP_DATA / "tmp"
-# Models and ffmpeg are read-only assets that may live inside the .app bundle
-# (the desktop launcher points AHAMVOICE_MODELS_DIR / AHAMVOICE_BIN_DIR at the
-# bundle's Resources). They default to BASE/... for the classic deployment so
-# the writable data dir (BASE) and the read-only assets can be split apart.
-MODELS = Path(os.environ.get("AHAMVOICE_MODELS_DIR") or (BASE / "models" / "modelscope" / "iic"))
+MODELS = BASE / "models" / "modelscope" / "iic"
+VAD = MODELS / "speech_fsmn_vad_zh-cn-16k-common-pytorch"
+PUNC = MODELS / "punc_ct-transformer_cn-en-common-vocab471067-large"
+PARAFORMER = MODELS / "speech_seaco_paraformer_large_asr_nat-zh-cn-16k-common-vocab8404-pytorch"
+CAMPLUS = MODELS / "speech_campplus_sv_zh-cn_16k-common"
+EMOTION = MODELS / "emotion2vec_plus_large"
 VOICEPRINTS = BASE / "voiceprints"
-# Per-model paths deliberately are NOT constants: in a slim build the bundle dir
-# is empty and the real files land in the per-user download dir at runtime, so
-# anything resolved at import time would point at the wrong place forever.
-# Always go through models_hub.model_path(<key>).
-# MODELS may point inside the .app bundle (read-only). Downloads always land in
-# the per-user dir; resolve_model_path() prefers the downloaded copy.
-MODELS_DOWNLOAD = BASE / "models" / "modelscope" / "iic"
-models_hub.configure(MODELS, MODELS_DOWNLOAD)
-BIN_DIR = Path(os.environ.get("AHAMVOICE_BIN_DIR") or (BASE / "bin"))
-FFMPEG = BIN_DIR / "ffmpeg"
-FFPROBE = BIN_DIR / "ffprobe"
-os.environ["PATH"] = f"{BIN_DIR}:{os.environ.get('PATH', '')}"
+FFMPEG = BASE / "bin" / "ffmpeg"
+FFPROBE = BASE / "bin" / "ffprobe"
+os.environ["PATH"] = f"{BASE / 'bin'}:{os.environ.get('PATH', '')}"
+
+# 推理设备。默认 cpu（macOS 本机部署）；Linux + NVIDIA 部署设 NEWVOICE_ASR_DEVICE=cuda:0
+# 即可让 FunASR 的 ASR / 情绪模型走 GPU。ModelScope 的 speaker_verification
+# pipeline 只认 "cpu" / "gpu"，所以单独映射一层。
+ASR_DEVICE = (os.environ.get("NEWVOICE_ASR_DEVICE") or "cpu").strip()
+
+
+def modelscope_device() -> str:
+    return "gpu" if ASR_DEVICE.startswith("cuda") else "cpu"
+
 
 for path in [APP_DATA, RECORDINGS, EXPORTS, TMP, VOICEPRINTS]:
     path.mkdir(parents=True, exist_ok=True)
 
 
 # ---------------------------------------------------------------------------
-# Runtime config (config.json in the writable data dir). Single-user desktop
-# mode keeps the DeepSeek API key here instead of .env so it survives next to a
-# read-only .app bundle and can be edited from the in-app Settings page. Env
-# vars still win, so the classic local-venv deployment is unchanged.
+# LLM 配置持久层（与 aham-voice 开源版对齐）
+# 大模型配置存 BASE/config.json（原子写）。读取优先级:环境变量 -> config.json
+# -> 默认值;同时兼容通用 LLM_* 新键与 DEEPSEEK_* 旧键(新键优先),所以原有
+# .env / 环境变量部署不受影响。
 # ---------------------------------------------------------------------------
 CONFIG_PATH = BASE / "config.json"
 
@@ -124,7 +114,7 @@ def save_user_config(updates: dict[str, Any]) -> dict[str, Any]:
 
 
 DEFAULT_LLM_API_BASE = "https://api.deepseek.com"
-DEFAULT_LLM_MODEL = "deepseek-v4-pro"
+DEFAULT_LLM_MODEL = "deepseek-v4-flash"
 
 
 def get_llm_config() -> tuple[str, str, str]:
@@ -132,8 +122,7 @@ def get_llm_config() -> tuple[str, str, str]:
 
     Reading priority (each field independently): env -> config.json -> default.
     Both the new generic keys and the legacy DeepSeek keys are honoured so that
-    existing config.json / environment setups keep working unchanged. The new
-    generic keys win over the legacy ones when both are present.
+    existing config.json / environment setups keep working unchanged.
     """
     cfg = load_user_config()
     api_key = (
@@ -170,62 +159,7 @@ def get_llm_provider() -> str:
     ).strip()
 
 
-def voiceprint_autolearn_enabled() -> bool:
-    """Whether renaming a speaker also feeds that audio back into the voiceprint.
-
-    On by default: the correction is the strongest label the app ever gets, and
-    throwing it away is why the same person keeps coming back as "说话人 3".
-    """
-    raw = os.environ.get("AHAMVOICE_VOICEPRINT_AUTOLEARN")
-    if raw is not None:
-        return raw.strip().lower() not in {"", "0", "false", "no", "off"}
-    value = load_user_config().get("voiceprint_autolearn")
-    return True if value is None else bool(value)
-
-
-# ---------------------------------------------------------------------------
-# Runtime handshake. The desktop launcher picks a port at startup, so anything
-# outside the app (the MCP server, a script) has no way to find the API. We
-# publish it here, next to the data dir, together with a token that identifies
-# callers that could read the user's home dir anyway.
-# ---------------------------------------------------------------------------
-RUNTIME_PATH = BASE / "runtime.json"
-
-
-def local_api_token() -> str:
-    token = str(load_user_config().get("local_api_token") or "").strip()
-    if not token:
-        token = secrets.token_urlsafe(24)
-        save_user_config({"local_api_token": token})
-    return token
-
-
-def write_runtime_file(port: int) -> None:
-    payload = {
-        "port": int(port),
-        "base_url": f"http://127.0.0.1:{int(port)}",
-        "token": local_api_token(),
-        "pid": os.getpid(),
-        "started_at": now(),
-    }
-    BASE.mkdir(parents=True, exist_ok=True)
-    tmp = RUNTIME_PATH.with_suffix(".json.tmp")
-    with open(tmp, "w", encoding="utf-8") as fh:
-        json.dump(payload, fh, ensure_ascii=False, indent=2)
-    os.chmod(tmp, 0o600)
-    tmp.replace(RUNTIME_PATH)
-
-
-def clear_runtime_file() -> None:
-    RUNTIME_PATH.unlink(missing_ok=True)
-
-
-# Thin backward-compatible alias so any remaining/older call sites keep working.
-def get_deepseek_config() -> tuple[str, str, str]:
-    return get_llm_config()
-
-
-app = FastAPI(title="AhamVoice Local API", version="0.1.0")
+app = FastAPI(title="NewVoice Local API", version="0.1.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -239,26 +173,6 @@ app.add_middleware(
     allow_headers=["*"],
     expose_headers=["Content-Disposition"],
 )
-
-@app.middleware("http")
-async def require_local_token(request: Any, call_next: Any) -> Any:
-    """Opt-in gate for the local API.
-
-    The API binds to 127.0.0.1 and has no auth, which was fine while the only
-    client was the app's own window. An MCP server widens that to "any process
-    on this Mac", so AHAMVOICE_REQUIRE_TOKEN=1 makes callers present the token
-    from runtime.json (readable only by the user). Off by default: turning it on
-    without also passing the token to the bundled frontend would lock the window
-    out of its own backend.
-    """
-    if request.url.path.startswith("/api/") and env_bool("AHAMVOICE_REQUIRE_TOKEN"):
-        supplied = request.headers.get("x-aham-token") or request.query_params.get("token") or ""
-        if not hmac.compare_digest(supplied, local_api_token()):
-            from fastapi.responses import JSONResponse
-
-            return JSONResponse({"detail": "missing or invalid local token"}, status_code=401)
-    return await call_next(request)
-
 
 _asr_model: Any | None = None
 _speaker_verifier: Any | None = None
@@ -277,7 +191,7 @@ DEFAULT_VOICEPRINT_THRESHOLD = 0.66
 
 @contextmanager
 def db() -> Any:
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
     try:
         yield conn
@@ -319,6 +233,10 @@ def clean_sensevoice_text(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def clean_wecom_name(text: str) -> str:
+    return re.sub(r"^\s*\d+\s*[-_－—]\s*", "", text or "").strip()
+
+
 def seconds_label(seconds: float | int | None) -> str:
     total = int(seconds or 0)
     h = total // 3600
@@ -337,7 +255,7 @@ def parse_local_time(value: str | None) -> datetime | None:
 
 
 def initial_password() -> str:
-    return os.environ.get("AHAMVOICE_INITIAL_PASSWORD", "changeme")
+    return os.environ.get("NEWVOICE_INITIAL_PASSWORD", "orchisky888888")
 
 
 def hash_password(password: str) -> str:
@@ -449,6 +367,7 @@ def ensure_schema() -> None:
                 title text not null,
                 filename text not null,
                 file_path text not null,
+                meeting_type text not null,
                 tag text,
                 owner_id text not null,
                 team_id text,
@@ -456,21 +375,6 @@ def ensure_schema() -> None:
                 duration_label text not null,
                 asr_status text not null default 'pending',
                 summary_status text not null default 'pending',
-                speaker_count integer,
-                crm_sync_status text not null default 'pending',
-                crm_sync_error text,
-                crm_synced_at text,
-                crm_recording_id text,
-                crm_minute_id text,
-                crm_recording_url text,
-                crm_minute_url text,
-                crm_relation_status text,
-                crm_relation_source text,
-                crm_relation_confidence real,
-                crm_relation_target_type text,
-                crm_relation_target_id text,
-                crm_relation_target_name text,
-                crm_sync_response text not null default '{}',
                 created_at text not null,
                 updated_at text not null
             );
@@ -493,6 +397,19 @@ def ensure_schema() -> None:
                 content text not null,
                 model text not null,
                 created_at text not null
+            );
+            create table if not exists summary_revision_drafts (
+                id text primary key,
+                recording_id text not null,
+                user_id text not null,
+                base_summary_id text not null,
+                transcript_hash text not null,
+                instruction text not null,
+                content text not null,
+                model text not null,
+                created_at text not null,
+                expires_at real not null,
+                applied_summary_id text
             );
             create table if not exists emotion_analyses (
                 id text primary key,
@@ -583,23 +500,6 @@ def ensure_schema() -> None:
                 correction_terms text,
                 created_at text not null
             );
-            create table if not exists recording_contexts (
-                recording_id text primary key,
-                briefing text not null default '',
-                created_at text not null,
-                updated_at text not null
-            );
-            create table if not exists recording_hotwords (
-                id text primary key,
-                recording_id text not null,
-                term text not null,
-                aliases text not null default '',
-                note text,
-                source text not null default 'mcp',
-                hit_count integer not null default 0,
-                created_at text not null
-            );
-            create index if not exists idx_recording_hotwords_rec on recording_hotwords(recording_id);
             create table if not exists speaker_profiles (
                 id text primary key,
                 name text not null,
@@ -610,23 +510,6 @@ def ensure_schema() -> None:
                 sample_path text not null,
                 threshold real not null default 0.66,
                 active integer not null default 1,
-                created_at text not null
-            );
-            create table if not exists speaker_autolearn (
-                id text primary key,
-                recording_id text not null,
-                speaker text not null,
-                profile_id text not null,
-                name text not null,
-                created_at text not null
-            );
-            create unique index if not exists idx_speaker_autolearn_key
-                on speaker_autolearn(recording_id, speaker);
-            create table if not exists speaker_profile_embeddings (
-                profile_id text primary key,
-                fingerprint text not null,
-                dim integer not null,
-                vector text not null,
                 created_at text not null
             );
             create table if not exists speaker_samples (
@@ -675,21 +558,7 @@ def ensure_schema() -> None:
                 conn.execute(f"alter table users add column {column} {definition}")
         recording_cols = {row["name"] for row in conn.execute("pragma table_info(recordings)").fetchall()}
         recording_migrations = {
-            "crm_sync_status": "text not null default 'pending'",
-            "crm_sync_error": "text",
-            "crm_synced_at": "text",
-            "crm_recording_id": "text",
-            "crm_minute_id": "text",
-            "crm_recording_url": "text",
-            "crm_minute_url": "text",
-            "crm_relation_status": "text",
-            "crm_relation_source": "text",
-            "crm_relation_confidence": "real",
-            "crm_relation_target_type": "text",
-            "crm_relation_target_id": "text",
-            "crm_relation_target_name": "text",
-            "crm_sync_response": "text not null default '{}'",
-            "speaker_count": "integer",
+            "expected_speakers": "integer",
         }
         for column, definition in recording_migrations.items():
             if column not in recording_cols:
@@ -737,14 +606,6 @@ def ensure_schema() -> None:
             where status in ('done', 'failed')
             """
         )
-        # 会议类型 / 预计说话人 / 自动处理已经删掉：纪要模板按类型分叉的设计对
-        # "稿子交给大模型消费"没有意义，用户每次也都要自动处理。老库里的列一并
-        # 删除，不留死列。
-        recording_cols = {row["name"] for row in conn.execute("pragma table_info(recordings)").fetchall()}
-        for dead in ("meeting_type", "expected_speakers"):
-            if dead in recording_cols:
-                conn.execute(f"alter table recordings drop column {dead}")
-
         hotword_cols = {row["name"] for row in conn.execute("pragma table_info(hotwords)").fetchall()}
         hotword_migrations = {
             "source_key": "text",
@@ -760,7 +621,6 @@ def ensure_schema() -> None:
             "last_used_at": "text",
             "expires_at": "text",
             "hit_count": "integer not null default 0",
-            "spoken": "text",
             "updated_at": "text",
         }
         for column, definition in hotword_migrations.items():
@@ -786,7 +646,8 @@ def ensure_schema() -> None:
             """
             update hotwords
             set protected = 1, state = 'active', active = 1
-            where source in ('系统内置', '产品库') or kind in ('产品', '系统')
+            where (source in ('系统内置', '产品库') or kind in ('产品', '系统'))
+              and not (source = 'manual' and scope = 'personal')
             """
         )
         conn.execute("create index if not exists idx_hotwords_source on hotwords(source, active, state)")
@@ -794,8 +655,9 @@ def ensure_schema() -> None:
         conn.execute("create index if not exists idx_hotwords_word on hotwords(word)")
         default_sources = [
             ("protected", "保护热词", "protected", 1, 0, 0, 1200, 12000, 50000),
+            ("crm", "CRM-金蝶-DeepSeek", "crm", 1, 360, 180, 3000, 10000, 50000),
+            ("wecom-journals", "企微日报-DeepSeek", "wecom", 1, 720, 31, 3000, 10000, 50000),
             ("manual", "手工维护", "manual", 1, 0, 0, 3000, 10000, 50000),
-            ("txt-import", "txt 导入", "manual", 1, 0, 0, 3000, 10000, 50000),
         ]
         for source_id, name, source_type, enabled, schedule_minutes, lookback_days, asr_limit, correction_limit, candidate_limit in default_sources:
             if not conn.execute("select 1 from hotword_sources where id = ?", (source_id,)).fetchone():
@@ -825,8 +687,8 @@ def ensure_schema() -> None:
             conn.execute("update speaker_profiles set scope = case when team_id is null then 'global' else 'team' end")
         if "note" not in profile_cols:
             conn.execute("alter table speaker_profiles add column note text")
-        # Single-user desktop build: no demo teams/users are seeded. The lone
-        # real account ("administrator") is created below.
+        # 演示团队 / 演示用户（销售一组·项目调研组 / 陈思源·林伟·韩雪·赵敏）的播种已移除——
+        # 本部署只保留真实用户。仅保留下方的 administrator 引导账号。
         default_hash = hash_password(initial_password())
         timestamp = now()
         conn.execute(
@@ -887,15 +749,16 @@ def ensure_schema() -> None:
                 values(?,?,?,?,?,?,?,?,?)
                 """,
                 [
+                    (str(uuid.uuid4()), "name", "李成豹", "manager", "[]", 1, 10, timestamp, timestamp),
                     (str(uuid.uuid4()), "local_username", "administrator", "admin", "[]", 1, 1, timestamp, timestamp),
                 ],
             )
         if not conn.execute("select 1 from hotwords limit 1").fetchone():
             seed_hotwords = [
-                ("AhamVoice", "产品", "aham voice,aham", "系统内置", "部门共享", 10, 1),
+                ("NewVoice", "产品", "new voice,牛 voice", "系统内置", "部门共享", 10, 1),
                 ("ERP", "行业", "企业资源计划", "产品库", "部门共享", 8, 1),
                 ("MES", "行业", "制造执行系统", "产品库", "部门共享", 8, 1),
-                ("ERP 接口", "项目", "ERP API,ERP 系统", "系统内置", "团队共享", 9, 1),
+                ("金蝶接口", "项目", "金蝶 API,金蝶系统", "CRM", "团队共享", 9, 1),
                 ("客户成功", "组织", "CS,售后成功", "通讯录", "部门共享", 6, 1),
             ]
             conn.executemany(
@@ -980,8 +843,8 @@ def sweep_tmp_and_exports() -> dict[str, int]:
     accumulate forever (every playback writes a new one) — observed 131 files
     in TMP, 125 older than 1 day. Exports grow the same way.
     """
-    tmp_ttl = int(os.environ.get("AHAMVOICE_TMP_TTL_HOURS", "24")) * 3600
-    export_ttl = int(os.environ.get("AHAMVOICE_EXPORT_TTL_DAYS", "14")) * 86400
+    tmp_ttl = int(os.environ.get("NEWVOICE_TMP_TTL_HOURS", "24")) * 3600
+    export_ttl = int(os.environ.get("NEWVOICE_EXPORT_TTL_DAYS", "14")) * 86400
     now_ts = time.time()
     tmp_cutoff = now_ts - tmp_ttl
     export_cutoff = now_ts - export_ttl
@@ -1006,7 +869,7 @@ def sweep_tmp_and_exports() -> dict[str, int]:
 
 def _start_cleanup_loop() -> None:
     """Run sweep_tmp_and_exports on a timer in a daemon thread."""
-    interval = int(os.environ.get("AHAMVOICE_SWEEP_INTERVAL_MINUTES", "60")) * 60
+    interval = int(os.environ.get("NEWVOICE_SWEEP_INTERVAL_MINUTES", "60")) * 60
 
     def _loop() -> None:
         # First sweep immediately so a fresh server reclaims stale files from
@@ -1018,7 +881,7 @@ def _start_cleanup_loop() -> None:
                 pass
             time.sleep(interval)
 
-    threading.Thread(target=_loop, name="ahamvoice-cleanup", daemon=True).start()
+    threading.Thread(target=_loop, name="newvoice-cleanup", daemon=True).start()
 
 
 def recover_queued_recordings() -> int:
@@ -1079,7 +942,7 @@ def recover_queued_recordings() -> int:
                 # process_recording_background already records failure in DB.
                 continue
 
-    threading.Thread(target=_drain, name="ahamvoice-queued-recovery", daemon=True).start()
+    threading.Thread(target=_drain, name="newvoice-queued-recovery", daemon=True).start()
     return len(pending)
 
 
@@ -1135,6 +998,13 @@ def set_setting(conn: sqlite3.Connection, key: str, value: str) -> None:
     )
 
 
+def normalize_mapping(row: dict[str, Any]) -> dict[str, Any]:
+    payload = dict(row)
+    payload["managed_team_ids"] = safe_json(payload.get("managed_team_ids"), [])
+    payload["active"] = bool(payload.get("active"))
+    return payload
+
+
 def create_session(conn: sqlite3.Connection, user_id: str) -> str:
     token = secrets.token_urlsafe(40)
     conn.execute(
@@ -1144,54 +1014,30 @@ def create_session(conn: sqlite3.Connection, user_id: str) -> str:
     return token
 
 
-# Single-user desktop build: there is no login. One fixed local user owns all
-# data. Role 'manager' with managed_team_ids ['*'] so it can see every recording
-# (the 'admin' role is deliberately barred from the recording library).
-LOCAL_USER_ID = "local-admin"
-
-
-def ensure_local_user() -> None:
-    ts = now()
-    with db() as conn:
-        if conn.execute("select 1 from users where id = ?", (LOCAL_USER_ID,)).fetchone():
-            conn.execute(
-                "update users set role='manager', managed_team_ids='[\"*\"]', status='active', updated_at=? where id=?",
-                (ts, LOCAL_USER_ID),
-            )
-            return
-        conn.execute(
-            """
-            insert into users(
-                id,username,name,email,mobile,dept,role,team_id,managed_team_ids,status,source,
-                must_change_password,failed_login_count,last_active_at,created_at,updated_at
-            )
-            values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-            """,
-            (
-                LOCAL_USER_ID, "local", "本机用户", "", "", "本机", "manager", None, '["*"]',
-                "active", "local", 0, 0, ts, ts, ts,
-            ),
-        )
-
-
 def current_user(
     authorization: str | None = Header(default=None),
     token_query: str | None = Query(default=None, alias="token"),
 ) -> dict[str, Any]:
-    # No authentication in single-user mode. The Header/Query params are accepted
-    # but ignored so existing media URLs carrying ?token= keep working.
+    # Header Bearer is the normal path. The ?token= query fallback exists for
+    # media/download URLs (<audio src>, <a download>) where the browser can't
+    # attach an Authorization header.
+    token = (authorization or "").removeprefix("Bearer").strip() or (token_query or "").strip()
+    if not token:
+        raise HTTPException(status_code=401, detail="missing session token")
     with db() as conn:
-        user = rowdict(conn.execute("select * from users where id = ?", (LOCAL_USER_ID,)).fetchone())
-    if not user:
-        ensure_local_user()
-        with db() as conn:
-            user = rowdict(conn.execute("select * from users where id = ?", (LOCAL_USER_ID,)).fetchone())
-    return normalize_user(user)
+        session = rowdict(conn.execute("select * from sessions where token = ?", (token,)).fetchone())
+        if not session or session["expires_at"] < now():
+            raise HTTPException(status_code=401, detail="invalid or expired session")
+        user = rowdict(conn.execute("select * from users where id = ?", (session["user_id"],)).fetchone())
+        if not user or user.get("status") != "active":
+            raise HTTPException(status_code=401, detail="user is disabled")
+        conn.execute("update users set last_active_at = ? where id = ?", (now(), user["id"]))
+        return normalize_user(user)
 
 
 def require_admin(user: dict[str, Any]) -> None:
-    # Single-user desktop build: the local user is always authorized.
-    return None
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="admin only")
 
 
 def managed_team_ids(user: dict[str, Any]) -> list[str]:
@@ -1215,10 +1061,14 @@ def recording_filter_where(
     user: dict[str, Any],
     scope: str = "mine",
     q: str = "",
+    meeting_type: str = "",
 ) -> tuple[str, list[Any]]:
     where, args = recording_where(user, scope)
     filters = [where]
     values = list(args)
+    if meeting_type and meeting_type != "全部":
+        filters.append("recordings.meeting_type = ?")
+        values.append(meeting_type)
     if q.strip():
         like = f"%{q.strip()}%"
         filters.append(
@@ -1246,19 +1096,12 @@ def can_access_recording(conn: sqlite3.Connection, recording_id: str, user: dict
 def recording_payload(conn: sqlite3.Connection, rec: dict[str, Any]) -> dict[str, Any]:
     owner = rowdict(conn.execute("select name from users where id = ?", (rec["owner_id"],)).fetchone())
     payload = dict(rec)
+    # Existing databases may still contain legacy CRM columns. They are kept
+    # on disk for non-destructive compatibility but are no longer exposed.
+    for key in tuple(payload):
+        if key.startswith("crm_"):
+            payload.pop(key)
     payload["owner_name"] = owner["name"] if owner else rec["owner_id"]
-    # speaker_count: prefer a live count over distinct speakers in the transcript
-    # (so historical recordings without the stored column still report correctly),
-    # falling back to the stored value when no segments exist yet.
-    distinct = conn.execute(
-        "select count(distinct coalesce(speaker_name, speaker)) from transcript_segments where recording_id = ?",
-        (rec["id"],),
-    ).fetchone()[0]
-    if distinct:
-        payload["speaker_count"] = int(distinct)
-    else:
-        stored = rec.get("speaker_count")
-        payload["speaker_count"] = int(stored) if stored is not None else None
     return payload
 
 
@@ -1325,15 +1168,8 @@ def create_task(conn: sqlite3.Connection, recording_id: str, title: str, step: s
     return task_id
 
 
-# 纯字母缩写（MES / SMT / ERP / WMS）是业务里最该进热词的一类词，不是编号。
-# 带数字或连字符的短串（A1 / X3 / KX-200）才是编号，偏置对它们无效。
-_PLAIN_ACRONYM = re.compile(r"[A-Za-z]{2,6}")
-
-
 def code_like_hotword(text: str) -> bool:
     value = text.strip()
-    if _PLAIN_ACRONYM.fullmatch(value):
-        return False
     if len(value) <= 3 and re.fullmatch(r"[A-Za-z0-9_-]+", value):
         return True
     return bool(re.fullmatch(r"[A-Za-z]{2,}[-_]?\d{2,}[A-Za-z0-9_-]*", value))
@@ -1433,7 +1269,7 @@ def hotword_row_score(row: dict[str, Any], rec: dict[str, Any] | None = None, us
     if rec:
         context = " ".join(
             str(item or "")
-            for item in [rec.get("title"), rec.get("filename"), rec.get("tag")]
+            for item in [rec.get("title"), rec.get("filename"), rec.get("tag"), rec.get("meeting_type")]
         ).lower()
         for term in hotword_terms(row, alias_limit=6):
             if term.lower() in context:
@@ -1456,51 +1292,9 @@ def hotword_row_score(row: dict[str, Any], rec: dict[str, Any] | None = None, us
 
 def hotword_limits() -> dict[str, int]:
     return {
-        # SeACo keeps only the top `nfilter` (50, hardcoded in funasr) hotwords
-        # per utterance, so a longer list buys nothing. Measured on a 10-minute
-        # meeting: 3000 terms cost 49% more wall time than none and made the
-        # transcript worse, while 20 and 3000 produced the same target recall.
-        "asr": env_int("AHAMVOICE_HOTWORD_LIMIT", 60, 10, 6000),
-        "correction": env_int("AHAMVOICE_CORRECTION_HOTWORD_LIMIT", 10000, 1000, 20000),
-        "protected": env_int("AHAMVOICE_PROTECTED_HOTWORD_LIMIT", 1200, 100, 5000),
-    }
-
-
-def recording_context_terms(conn: sqlite3.Connection, recording_id: str) -> list[dict[str, Any]]:
-    """Per-recording hotwords supplied ahead of transcription (the MCP briefing).
-
-    These are临场 terms — "this meeting is with <customer> about MES" — so they always
-    win a slot in the ASR package regardless of the global ranking, and they die
-    with the recording instead of polluting the global list.
-    """
-    return rowsdict(
-        conn.execute(
-            "select * from recording_hotwords where recording_id = ? order by created_at",
-            (recording_id,),
-        ).fetchall()
-    )
-
-
-def recording_context_payload(conn: sqlite3.Connection, recording_id: str) -> dict[str, Any]:
-    row = rowdict(
-        conn.execute("select * from recording_contexts where recording_id = ?", (recording_id,)).fetchone()
-    )
-    terms = recording_context_terms(conn, recording_id)
-    return {
-        "recording_id": recording_id,
-        "briefing": (row or {}).get("briefing") or "",
-        "updated_at": (row or {}).get("updated_at"),
-        "terms": [
-            {
-                "id": item["id"],
-                "term": item["term"],
-                "aliases": [alias for alias in str(item.get("aliases") or "").split(",") if alias],
-                "note": item.get("note") or "",
-                "source": item.get("source") or "mcp",
-                "hit_count": int(item.get("hit_count") or 0),
-            }
-            for item in terms
-        ],
+        "asr": env_int("NEWVOICE_HOTWORD_LIMIT", 3000, 200, 6000),
+        "correction": env_int("NEWVOICE_CORRECTION_HOTWORD_LIMIT", 10000, 1000, 20000),
+        "protected": env_int("NEWVOICE_PROTECTED_HOTWORD_LIMIT", 1200, 100, 5000),
     }
 
 
@@ -1513,7 +1307,10 @@ def build_hotword_package(conn: sqlite3.Connection, rec: dict[str, Any], user: d
             where active = 1
               and coalesce(state, 'active') in ('active', 'protected')
               and (expires_at is null or expires_at = '' or datetime(expires_at) > datetime('now'))
-            """
+              -- 个人手填热词(scope='personal')只对其所有者本人的录音生效,不泄漏给他人 ASR。
+              and (coalesce(scope, '') != 'personal' or owner_id = ?)
+            """,
+            (user.get("id"),),
         ).fetchall()
     )
     ranked = sorted(rows, key=lambda row: hotword_row_score(row, rec, user), reverse=True)
@@ -1522,21 +1319,6 @@ def build_hotword_package(conn: sqlite3.Connection, rec: dict[str, Any], user: d
     selected_rows: list[dict[str, Any]] = []
     selected_terms: list[str] = []
     selected_keys: set[str] = set()
-
-    # 会前上下文词先占位：它们描述的是这一场会独有的专名，全局排序看不见它们。
-    context_rows = recording_context_terms(conn, rec["id"])
-    context_replacements: dict[str, str] = {}
-    for item in context_rows:
-        term = str(item.get("term") or "").strip()
-        if not term or term.lower() in selected_keys or not valid_asr_hotword(term):
-            continue
-        selected_terms.append(term)
-        selected_keys.add(term.lower())
-        for alias in str(item.get("aliases") or "").split(","):
-            alias = alias.strip()
-            if alias and alias.lower() != term.lower():
-                context_replacements[alias.lower()] = term
-    context_terms_count = len(selected_terms)
 
     def add_rows(candidates: list[dict[str, Any]], term_limit: int, alias_limit: int = 2) -> None:
         for row in candidates:
@@ -1587,19 +1369,10 @@ def build_hotword_package(conn: sqlite3.Connection, rec: dict[str, Any], user: d
             if not existing or len(word) < len(existing):
                 replacement_map[alias_key] = word
 
-    # 会前上下文给的别名映射最后合入，覆盖同名的全局映射：这一场的说法优先。
-    replacement_map.update(context_replacements)
-    for alias in context_replacements:
-        if alias not in correction_keys and len(correction_terms) < limits["correction"]:
-            correction_terms.append(alias)
-            correction_keys.add(alias)
-
     source_counts: dict[str, int] = {}
     for row in selected_rows:
         source = str(row.get("source") or "未知来源")
         source_counts[source] = source_counts.get(source, 0) + 1
-    if context_terms_count:
-        source_counts["会前上下文"] = context_terms_count
     package = {
         "asr_terms": selected_terms,
         "correction_terms": correction_terms,
@@ -1607,7 +1380,6 @@ def build_hotword_package(conn: sqlite3.Connection, rec: dict[str, Any], user: d
         "correction_terms_count": len(correction_terms),
         "protected_terms_count": sum(1 for row in selected_rows if int(row.get("protected") or 0)),
         "dynamic_terms_count": sum(1 for row in selected_rows if not int(row.get("protected") or 0)),
-        "context_terms_count": context_terms_count,
         "source_summary": source_counts,
         "replacement_map": replacement_map,
     }
@@ -1641,7 +1413,7 @@ def build_hotword_package(conn: sqlite3.Connection, rec: dict[str, Any], user: d
         if selected_ids:
             placeholders = ",".join("?" for _ in selected_ids)
             conn.execute(
-                f"update hotwords set last_used_at = ? where id in ({placeholders})",
+                f"update hotwords set last_used_at = ?, hit_count = coalesce(hit_count, 0) + 1 where id in ({placeholders})",
                 (now(), *selected_ids),
             )
     return package
@@ -1696,33 +1468,20 @@ def get_asr_model() -> Any:
     if _asr_model is None:
         with _asr_init_lock:
             if _asr_model is None:
-                missing = models_hub.missing_required_labels()
+                missing = [str(path) for path in [PARAFORMER, VAD, PUNC, CAMPLUS] if not path.exists()]
                 if missing:
-                    raise RuntimeError(
-                        "缺少本地模型：" + "、".join(missing) + "。请到「设置 → 本地模型」下载后再处理录音。"
-                    )
+                    raise RuntimeError(f"ASR/diarization model missing: {', '.join(missing)}")
                 from funasr import AutoModel
 
-                # Performance knobs. Default device stays CPU (the safe, always-works
-                # path). Set AHAMVOICE_ASR_DEVICE=mps to try the Apple GPU. Threads
-                # default to all cores; AHAMVOICE_ASR_THREADS overrides.
-                device = (os.environ.get("AHAMVOICE_ASR_DEVICE") or "cpu").strip() or "cpu"
-                try:
-                    import torch
-
-                    threads = int(os.environ.get("AHAMVOICE_ASR_THREADS") or (os.cpu_count() or 4))
-                    torch.set_num_threads(max(1, threads))
-                except Exception:
-                    pass
-
                 _asr_model = AutoModel(
-                    model=str(models_hub.model_path("asr")),
-                    vad_model=str(models_hub.model_path("vad")),
-                    vad_kwargs={"max_single_segment_time": int(os.environ.get("AHAMVOICE_VAD_MAX_SEGMENT_MS", "30000"))},
-                    punc_model=str(models_hub.model_path("punc")),
-                    spk_model=str(models_hub.model_path("voiceprint")),
-                    device=device,
+                    model=str(PARAFORMER),
+                    vad_model=str(VAD),
+                    vad_kwargs={"max_single_segment_time": int(os.environ.get("NEWVOICE_VAD_MAX_SEGMENT_MS", "30000"))},
+                    punc_model=str(PUNC),
+                    spk_model=str(CAMPLUS),
+                    device=ASR_DEVICE,
                     disable_update=True,
+                    disable_pbar=True,
                 )
     return _asr_model
 
@@ -1736,13 +1495,13 @@ def get_speaker_verifier() -> Any:
                 from modelscope.utils.constant import Tasks
 
                 _speaker_verifier = pipeline(
-                    task=Tasks.speaker_verification, model=str(models_hub.model_path("voiceprint"))
+                    task=Tasks.speaker_verification, model=str(CAMPLUS), device=modelscope_device()
                 )
     return _speaker_verifier
 
 
 def voiceprint_threshold_default() -> float:
-    return env_float("AHAMVOICE_VOICEPRINT_THRESHOLD", DEFAULT_VOICEPRINT_THRESHOLD, 0.45, 0.95)
+    return env_float("NEWVOICE_VOICEPRINT_THRESHOLD", DEFAULT_VOICEPRINT_THRESHOLD, 0.45, 0.95)
 
 
 def clamp_voiceprint_threshold(value: Any) -> float:
@@ -1755,11 +1514,11 @@ def clamp_voiceprint_threshold(value: Any) -> float:
 
 def voiceprint_match_settings() -> dict[str, float | int]:
     return {
-        "min_threshold": env_float("AHAMVOICE_VOICEPRINT_MIN_THRESHOLD", voiceprint_threshold_default(), 0.45, 0.95),
-        "margin": env_float("AHAMVOICE_VOICEPRINT_MARGIN", 0.08, 0.0, 0.35),
-        "sample_limit": env_int("AHAMVOICE_VOICEPRINT_MATCH_SAMPLES", 8, 3, 12),
-        "max_sample_seconds": env_float("AHAMVOICE_VOICEPRINT_SAMPLE_SECONDS", 14.0, 5.0, 25.0),
-        "min_sample_seconds": env_float("AHAMVOICE_VOICEPRINT_MIN_SAMPLE_SECONDS", 2.0, 1.0, 8.0),
+        "min_threshold": env_float("NEWVOICE_VOICEPRINT_MIN_THRESHOLD", voiceprint_threshold_default(), 0.45, 0.95),
+        "margin": env_float("NEWVOICE_VOICEPRINT_MARGIN", 0.08, 0.0, 0.35),
+        "sample_limit": env_int("NEWVOICE_VOICEPRINT_MATCH_SAMPLES", 8, 3, 12),
+        "max_sample_seconds": env_float("NEWVOICE_VOICEPRINT_SAMPLE_SECONDS", 14.0, 5.0, 25.0),
+        "min_sample_seconds": env_float("NEWVOICE_VOICEPRINT_MIN_SAMPLE_SECONDS", 2.0, 1.0, 8.0),
     }
 
 
@@ -1859,84 +1618,6 @@ def concat_audio(parts: list[Path], target: Path, workdir: Path) -> None:
     )
 
 
-def _embed_audio(path: str) -> list[float] | None:
-    """CAM++ speaker embedding for one wav, or None if the model refuses it."""
-    verifier = get_speaker_verifier()
-    try:
-        with _asr_lock:
-            result = verifier([str(path)], output_emb=True)
-    except Exception:
-        return None
-    embs = (result or {}).get("embs")
-    if embs is None or len(embs) == 0:
-        return None
-    return [float(value) for value in list(embs[0])]
-
-
-def _cosine(left: list[float], right: list[float]) -> float:
-    if not left or not right or len(left) != len(right):
-        return -1.0
-    dot = sum(a * b for a, b in zip(left, right))
-    left_norm = sum(a * a for a in left) ** 0.5
-    right_norm = sum(b * b for b in right) ** 0.5
-    if left_norm == 0 or right_norm == 0:
-        return -1.0
-    return float(dot / (left_norm * right_norm))
-
-
-def _sample_fingerprint(path: str) -> str:
-    try:
-        stat = Path(path).stat()
-    except OSError:
-        return ""
-    return f"{int(stat.st_mtime)}:{stat.st_size}"
-
-
-def profile_embedding(conn: sqlite3.Connection, profile: dict[str, Any]) -> list[float] | None:
-    """Cached embedding for an enrolled voice.
-
-    The matcher used to call the verifier once per (interval x profile) pair,
-    which re-encoded the *same* enrolment sample for every interval of every
-    speaker. Caching it turns an O(intervals x profiles) model workload into
-    O(intervals + profiles) plus dot products. The pipeline's own `score` is
-    exactly the cosine of these embeddings (verified to ~2e-6, float32 rounding),
-    so every existing threshold keeps its meaning.
-
-    The cache key is the sample file's mtime+size: re-enrolling a voice writes a
-    new sample, which changes the fingerprint and invalidates the row.
-    """
-    sample_path = str(profile.get("sample_path") or "")
-    fingerprint = _sample_fingerprint(sample_path)
-    if not fingerprint:
-        return None
-    row = rowdict(
-        conn.execute(
-            "select * from speaker_profile_embeddings where profile_id = ?", (profile["id"],)
-        ).fetchone()
-    )
-    if row and row.get("fingerprint") == fingerprint:
-        cached = safe_json(row.get("vector"), None)
-        if isinstance(cached, list) and cached:
-            return [float(value) for value in cached]
-
-    vector = _embed_audio(sample_path)
-    if not vector:
-        return None
-    conn.execute(
-        """
-        insert into speaker_profile_embeddings(profile_id, fingerprint, dim, vector, created_at)
-        values(?,?,?,?,?)
-        on conflict(profile_id) do update set
-            fingerprint = excluded.fingerprint,
-            dim = excluded.dim,
-            vector = excluded.vector,
-            created_at = excluded.created_at
-        """,
-        (profile["id"], fingerprint, len(vector), json.dumps(vector), now()),
-    )
-    return vector
-
-
 def match_speaker_profiles(rec: dict[str, Any], sentence_info: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     with db() as conn:
         profiles = load_speaker_profiles(conn, rec.get("team_id"), rec.get("owner_id"))
@@ -1950,14 +1631,7 @@ def match_speaker_profiles(rec: dict[str, Any], sentence_info: list[dict[str, An
         float(settings["min_sample_seconds"]),
     )
     matches: dict[str, dict[str, Any]] = {}
-    with db() as conn:
-        profile_vectors = {
-            profile["id"]: profile_embedding(conn, profile) for profile in profiles
-        }
-    profiles = [profile for profile in profiles if profile_vectors.get(profile["id"])]
-    if not profiles:
-        return {}
-
+    verifier = get_speaker_verifier()
     with tempfile.TemporaryDirectory(dir=TMP) as tmp:
         tmpdir = Path(tmp)
         for spk, ranges in intervals.items():
@@ -1965,12 +1639,15 @@ def match_speaker_profiles(rec: dict[str, Any], sentence_info: list[dict[str, An
             for idx, (start, end) in enumerate(ranges):
                 sample = tmpdir / f"spk_{spk}_{idx}.wav"
                 extract_interval(Path(rec["file_path"]), sample, start, min(end, start + float(settings["max_sample_seconds"])))
-                # One encode per interval, then a dot product per profile.
-                interval_vector = _embed_audio(str(sample))
-                if not interval_vector:
-                    continue
                 for profile in profiles:
-                    score = _cosine(interval_vector, profile_vectors[profile["id"]])
+                    try:
+                        with _asr_lock:
+                            result = verifier([str(sample), profile["sample_path"]])
+                    except Exception:
+                        continue
+                    if isinstance(result, list):
+                        result = result[0] if result else {}
+                    score = float(result.get("score", -1.0))
                     if score >= 0:
                         profile_scores[profile["id"]].append(score)
             name_results: dict[str, dict[str, Any]] = {}
@@ -2019,56 +1696,19 @@ def match_speaker_profiles(rec: dict[str, Any], sentence_info: list[dict[str, An
 _FORMAL_ORG_MARKER = re.compile(r"(公司|集团|股份|有限|责任)")
 
 
-def common_word_frequency(text: str) -> int | None:
-    """How common this word is in jieba's dictionary; None means it is not in it.
-
-    Used to keep ordinary vocabulary out of the ASR hotword list. Rare or unknown
-    words are exactly the ones worth biasing toward; common ones are words the
-    recogniser already gets right.
-    """
-    try:
-        import jieba
-
-        jieba.initialize()
-        return jieba.get_FREQ(text)
-    except Exception:
-        return None
-
-
-def asr_hotword_rejection(text: str) -> str | None:
-    """Why seaco would not accept this term as a hotword, or None if it would.
-
-    Split out of valid_asr_hotword so callers that hand terms to a human or an
-    LLM (the MCP context tools) can explain the rejection instead of silently
-    dropping the word.
-    """
+def valid_asr_hotword(text: str) -> bool:
     value = text.strip()
     # 只喂能被说出口的短词：超长全称口语召回≈0、且会误偏置。
-    max_len = env_int("AHAMVOICE_HOTWORD_MAX_LEN", 8, 4, 20)
-    if len(value) < 2:
-        return "太短，至少 2 个字"
-    if len(value) > max_len:
-        return f"太长，最多 {max_len} 个字；请给口语里真会说出口的简称"
+    max_len = env_int("NEWVOICE_HOTWORD_MAX_LEN", 8, 4, 20)
+    if len(value) < 2 or len(value) > max_len:
+        return False
     if re.search(r"\s", value):
-        return "不能含空格，请拆成多个词"
-    if value.isdigit():
-        return "纯数字不作为热词"
-    if code_like_hotword(value):
-        return "看起来像编号/代码，ASR 偏置对它无效"
+        return False
+    if value.isdigit() or code_like_hotword(value):
+        return False
     if _FORMAL_ORG_MARKER.search(value):
-        return "含「公司/集团/股份/有限/责任」等书面组织词，口语里没人说全称"
-    frequency = common_word_frequency(value)
-    if frequency is not None and frequency >= env_int("AHAMVOICE_HOTWORD_MAX_FREQ", 500, 0, 200000):
-        # Measured on a real meeting: with 产品/会议/场景 in the list, seaco
-        # rewrote four correct 「场景」 into 「产品」 and one 「不一」 into 「会议」.
-        # A hotword only ever pulls the decoder toward itself, so a word the
-        # model already knows can do nothing but overwrite correct text.
-        return f"「{value}」是常用词（词频 {frequency}），作热词只会覆盖正确的字，请用专有名词"
-    return None
-
-
-def valid_asr_hotword(text: str) -> bool:
-    return asr_hotword_rejection(text) is None
+        return False
+    return True
 
 
 def hotword_prompt(conn: sqlite3.Connection) -> str:
@@ -2225,62 +1865,11 @@ def join_transcript_text(left: str, right: str) -> str:
 
 def semantic_segment_settings() -> dict[str, float | int]:
     return {
-        "max_chars": env_int("AHAMVOICE_SEGMENT_MAX_CHARS", 120, 60, 240),
-        "soft_chars": env_int("AHAMVOICE_SEGMENT_SOFT_CHARS", 80, 40, 180),
-        "max_seconds": env_int("AHAMVOICE_SEGMENT_MAX_SECONDS", 35, 10, 90),
-        "gap_seconds": float(os.environ.get("AHAMVOICE_SEGMENT_GAP_SECONDS", "2.0")),
+        "max_chars": env_int("NEWVOICE_SEGMENT_MAX_CHARS", 120, 60, 240),
+        "soft_chars": env_int("NEWVOICE_SEGMENT_SOFT_CHARS", 80, 40, 180),
+        "max_seconds": env_int("NEWVOICE_SEGMENT_MAX_SECONDS", 35, 10, 90),
+        "gap_seconds": float(os.environ.get("NEWVOICE_SEGMENT_GAP_SECONDS", "2.0")),
     }
-
-
-_MIDWORD_PUNCT = "，。！？、"
-_CJK_CHAR = re.compile(r"[一-鿿]")
-# Single characters that habitually stand alone as agreement noises. The
-# punctuation after them is real, and joining across it invents words: in
-# "难度还是有的，对，比较多" the 对 is a backchannel, not the head of 对比.
-_BACKCHANNEL_HEADS = "对嗯啊哦呃好行"
-
-
-def strip_midword_punctuation(text: str) -> str:
-    """Drop punctuation the punctuation model inserted inside a word.
-
-    CT-Transformer punctuates a stream it cannot re-segment, so it lands commas
-    and full stops mid-word — "会发邮件然，后会有一个", "这。个变更单". Measured on a
-    real 10-minute meeting: 95 such marks in 59 segments.
-
-    A mark is removed only when the characters it separates form a dictionary
-    word with it gone. HMM stays off so jieba cannot invent a word out of
-    unrelated characters, and backchannel heads are exempt.
-    """
-    if not env_bool("AHAMVOICE_PUNCT_CLEANUP", True) or len(text) < 3:
-        return text
-    import jieba
-
-    window = 4
-    out: list[str] = []
-    for index, char in enumerate(text):
-        if (
-            char in _MIDWORD_PUNCT
-            and 0 < index < len(text) - 1
-            and text[index - 1] not in _BACKCHANNEL_HEADS
-        ):
-            left = text[max(0, index - window) : index]
-            right = text[index + 1 : index + 1 + window]
-            if (
-                left
-                and right
-                and _CJK_CHAR.match(left[-1])
-                and _CJK_CHAR.match(right[0])
-            ):
-                joined = left + right
-                cut = len(left)
-                spans_word = any(
-                    len(word) >= 2 and start < cut < end
-                    for word, start, end in jieba.tokenize(joined, HMM=False)
-                )
-                if spans_word:
-                    continue  # drop the mark
-        out.append(char)
-    return "".join(out)
 
 
 def merge_transcript_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -2297,9 +1886,7 @@ def merge_transcript_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if not current:
             return
         current["start_label"] = seconds_label(current["start_sec"])
-        # Cleanup runs on the finished segment so it also catches marks that end
-        # up mid-word only after two pieces were joined.
-        current["text"] = strip_midword_punctuation(current["text"].strip())
+        current["text"] = current["text"].strip()
         merged.append(current)
         current = None
 
@@ -2354,19 +1941,6 @@ def merge_transcript_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         )
         if filler and not same_speaker:
             continue
-        # A dictionary word straddling the join means the punctuation model cut
-        # mid-word (it inserts a full stop at the break, so the halves look like
-        # finished sentences). Rejoin regardless of the length budget — leaving
-        # 「五百」 as 「…的五。」+「百单台…」 is worse than an over-long segment.
-        splits_word = same_speaker and gap <= gap_seconds and bool(
-            _boundary_splits_word(str(current["text"]), text)
-        )
-        if splits_word and combined_len <= max_chars * 2:
-            current["text"] = join_transcript_text(current["text"], text)
-            current["end_sec"] = end_sec
-            current["source_ids"].extend(item["source_ids"])
-            current["source_count"] += item["source_count"]
-            continue
         should_continue = transcript_needs_continuation(str(current["text"])) and combined_len <= max_chars
         if can_merge_same_speaker and (len(current["text"]) < soft_chars or should_continue or filler):
             current["text"] = join_transcript_text(current["text"], text)
@@ -2390,85 +1964,6 @@ def merge_transcript_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         current = item
     push_current()
     return [row for row in merged if len(bare_transcript_text(str(row.get("text") or ""))) >= 2]
-
-
-_BOUNDARY_PUNCT = "，。！？、 "
-
-
-def _boundary_splits_word(left: str, right: str, window: int = 4) -> str | None:
-    """Return the word straddling the join of `left`+`right`, if any.
-
-    FunASR labels speakers per token, so the label can flip in the middle of a
-    word: "你这前期的五" gets speaker 2 and "百单台…" speaker 1, splitting 五百
-    across a supposed turn boundary. A dictionary word spanning the join is hard
-    evidence that the audio there is one continuous utterance, not two turns.
-
-    HMM is off on purpose: the guessing mode invents plausible words out of
-    unrelated characters, which is exactly the false positive to avoid.
-    """
-    import jieba
-
-    head = left.rstrip(_BOUNDARY_PUNCT)[-window:]
-    tail = right.lstrip(_BOUNDARY_PUNCT)[:window]
-    if not head or not tail:
-        return None
-    joined = head + tail
-    cut = len(head)
-    for word, start, end in jieba.tokenize(joined, HMM=False):
-        if len(word) >= 2 and start < cut < end:
-            return word
-    return None
-
-
-def repair_speaker_fragments(items: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
-    """Give short mislabelled scraps back to the speaker around them.
-
-    Targets one specific defect: a tiny fragment attributed to a different
-    speaker, sandwiched between two segments of the same speaker, whose text
-    breaks a word. Punctuation is no help here — the punctuation model *adds* a
-    full stop at the cut, so the truncated half looks like a finished sentence.
-
-    Deliberately conservative. Long fragments are left alone even when a word
-    straddles the boundary: only the first characters are provably misattributed,
-    and handing a whole paragraph to the wrong speaker is worse than the split
-    word it would fix.
-    """
-    max_chars = env_int("AHAMVOICE_SPEAKER_FRAGMENT_MAX_CHARS", 15, 0, 80)
-    max_gap = env_float("AHAMVOICE_SPEAKER_FRAGMENT_MAX_GAP", 1.5, 0.0, 5.0)
-    if max_chars <= 0 or len(items) < 3:
-        return items, 0
-
-    def adopt(fragment: dict[str, Any], host: dict[str, Any]) -> None:
-        fragment["speaker"] = host["speaker"]
-        fragment["speaker_name"] = host.get("speaker_name")
-        fragment["voiceprint_id"] = host.get("voiceprint_id")
-        fragment["speaker_confidence"] = host.get("speaker_confidence")
-
-    repaired = 0
-    for index in range(1, len(items) - 1):
-        before, fragment, after = items[index - 1], items[index], items[index + 1]
-        if len(bare_transcript_text(str(fragment["text"]))) > max_chars:
-            continue
-        gap_before = float(fragment["start_sec"]) - float(before["end_sec"])
-        gap_after = float(after["start_sec"]) - float(fragment["end_sec"])
-        # Whichever side the broken word straddles is the side the fragment's
-        # audio actually continues into, so that is the speaker it belongs to.
-        if (
-            fragment["speaker"] != after["speaker"]
-            and gap_after <= max_gap
-            and _boundary_splits_word(str(fragment["text"]), str(after["text"]))
-        ):
-            adopt(fragment, after)
-            repaired += 1
-            continue
-        if (
-            fragment["speaker"] != before["speaker"]
-            and gap_before <= max_gap
-            and _boundary_splits_word(str(before["text"]), str(fragment["text"]))
-        ):
-            adopt(fragment, before)
-            repaired += 1
-    return items, repaired
 
 
 def sentence_info_to_transcript_segments(
@@ -2499,121 +1994,7 @@ def sentence_info_to_transcript_segments(
                 "confidence": None,
             }
         )
-    items, repaired = repair_speaker_fragments(items)
-    if repaired:
-        logging.getLogger("ahamvoice").info("speaker fragment repair: %d segments reassigned", repaired)
     return merge_transcript_items(items)
-
-
-def record_hotword_hits(conn: sqlite3.Connection, recording_id: str) -> dict[str, int]:
-    """Count how often each hotword actually showed up, and write it back.
-
-    Until this existed, `frequency` / `last_seen_at` / `hit_count` were only ever
-    written at creation time, so every freshness and popularity term in
-    hotword_row_score scored off a constant — and maintain_hotwords would expire
-    hand-added words that were being hit every week. Now the transcript feeds
-    them.
-    """
-    rows = conn.execute(
-        "select text from transcript_segments where recording_id = ?", (recording_id,)
-    ).fetchall()
-    text = "\n".join(str(row["text"] or "") for row in rows)
-    if not text:
-        return {"global_hits": 0, "global_words": 0, "context_hits": 0}
-    lowered = text.lower()
-
-    def count_terms(word: str, aliases: str) -> int:
-        total = 0
-        for term in [word, *str(aliases or "").split(",")]:
-            term = term.strip()
-            if len(term) >= 2:
-                total += lowered.count(term.lower())
-        return total
-
-    timestamp = now()
-    global_hits = 0
-    global_words = 0
-    for row in rowsdict(conn.execute("select id, word, aliases from hotwords where active = 1").fetchall()):
-        hits = count_terms(str(row.get("word") or ""), str(row.get("aliases") or ""))
-        if not hits:
-            continue
-        global_hits += hits
-        global_words += 1
-        conn.execute(
-            """
-            update hotwords
-            set frequency = coalesce(frequency, 0) + ?,
-                hit_count = coalesce(hit_count, 0) + ?,
-                last_seen_at = ?,
-                updated_at = ?
-            where id = ?
-            """,
-            (hits, hits, timestamp, timestamp, row["id"]),
-        )
-
-    context_hits = 0
-    for row in recording_context_terms(conn, recording_id):
-        hits = count_terms(str(row.get("term") or ""), str(row.get("aliases") or ""))
-        if not hits:
-            continue
-        context_hits += hits
-        conn.execute(
-            "update recording_hotwords set hit_count = coalesce(hit_count, 0) + ? where id = ?",
-            (hits, row["id"]),
-        )
-    return {"global_hits": global_hits, "global_words": global_words, "context_hits": context_hits}
-
-
-ASR_RATE_SETTING = "asr_seconds_per_audio_second"
-
-
-def asr_expected_seconds(duration: float) -> float:
-    """How long this transcription should take, from what past runs actually took."""
-    default_rate = env_float("AHAMVOICE_ASR_RATE", 0.65, 0.05, 5.0)
-    with db() as conn:
-        stored = get_setting(conn, ASR_RATE_SETTING, "")
-    try:
-        rate = float(stored) if stored else default_rate
-    except ValueError:
-        rate = default_rate
-    return max(1.0, duration * max(0.05, min(5.0, rate)))
-
-
-def record_asr_rate(duration: float, elapsed: float) -> None:
-    """Fold this run into the stored rate (EMA), so the estimate self-corrects."""
-    if duration <= 0 or elapsed <= 0:
-        return
-    observed = elapsed / duration
-    with db() as conn:
-        stored = get_setting(conn, ASR_RATE_SETTING, "")
-        try:
-            previous = float(stored) if stored else observed
-        except ValueError:
-            previous = observed
-        blended = previous * 0.7 + observed * 0.3
-        set_setting(conn, ASR_RATE_SETTING, f"{max(0.05, min(5.0, blended)):.4f}")
-
-
-def _asr_progress_ticker(
-    task_id: str, expected_seconds: float, stop: threading.Event, start_pct: int = 8, end_pct: int = 78
-) -> None:
-    """Report progress while FunASR is inside one long generate() call.
-
-    FunASR hands back nothing until the whole file is done, so the task sat at
-    8% for the entire run and then jumped to 100% — indistinguishable from a
-    hang. This estimates from elapsed time against the learned rate and stops
-    short of `end_pct`, so it never claims to be further along than it can know.
-    """
-    started = time.monotonic()
-    while not stop.wait(3.0):
-        fraction = min(1.0, (time.monotonic() - started) / max(1.0, expected_seconds))
-        percent = int(start_pct + (end_pct - start_pct) * fraction)
-        try:
-            with db() as conn:
-                update_task(conn, task_id, "running", percent)
-        except Exception:
-            # A progress update is never worth killing the transcription over.
-            return
 
 
 def transcribe_recording(recording_id: str, user: dict[str, Any], segment_seconds: int = 60) -> dict[str, Any]:
@@ -2621,10 +2002,11 @@ def transcribe_recording(recording_id: str, user: dict[str, Any], segment_second
         rec = can_access_recording(conn, recording_id, user)
         task_id = create_task(conn, recording_id, rec["title"], "VAD+说话人分离转写")
         conn.execute("update recordings set asr_status = ?, updated_at = ? where id = ?", ("running", now(), recording_id))
+        conn.execute("delete from transcript_segments where recording_id = ?", (recording_id,))
+        conn.execute("delete from summaries where recording_id = ?", (recording_id,))
+        conn.execute("delete from emotion_analyses where recording_id = ?", (recording_id,))
+        conn.execute("update recordings set summary_status = ? where id = ?", ("pending", recording_id))
         conn.commit()
-        # 旧稿子留到新稿子出来为止。此前是一开始就删，于是任何一次失败——模型没
-        # 加载上、进程被杀、依赖出问题——都会把用户已有的转写一起带走，而重跑
-        # 一次要几十分钟。删除已挪到成功写入的同一个事务里。
 
     try:
         model = get_asr_model()
@@ -2638,27 +2020,16 @@ def transcribe_recording(recording_id: str, user: dict[str, Any], segment_second
         generate_kwargs: dict[str, Any] = {
             "input": str(Path(rec["file_path"])),
             "cache": {},
-            "batch_size_s": int(os.environ.get("AHAMVOICE_BATCH_SIZE_S", "300")),
+            "batch_size_s": int(os.environ.get("NEWVOICE_BATCH_SIZE_S", "300")),
         }
         if hotword_text:
             generate_kwargs["hotword"] = hotword_text
-        expected_seconds = asr_expected_seconds(float(rec_for_package.get("duration") or 0))
-        stop_ticker = threading.Event()
-        ticker = threading.Thread(
-            target=_asr_progress_ticker,
-            args=(task_id, expected_seconds, stop_ticker),
-            name=f"asr-progress-{recording_id[:8]}",
-            daemon=True,
-        )
-        ticker.start()
-        generate_started = time.monotonic()
-        try:
-            with _asr_lock:
-                result = model.generate(**generate_kwargs)
-        finally:
-            stop_ticker.set()
-            ticker.join(timeout=5)
-        record_asr_rate(float(rec_for_package.get("duration") or 0), time.monotonic() - generate_started)
+        expected_spk = rec_for_package.get("expected_speakers")
+        if expected_spk and int(expected_spk) >= 2:
+            # 用户填了预计人数 → 固定聚类簇数，避免 CAM++ 过度聚类。
+            generate_kwargs["preset_spk_num"] = int(expected_spk)
+        with _asr_lock:
+            result = model.generate(**generate_kwargs)
         if not result:
             raise RuntimeError("ASR returned empty result")
         sentence_info = result[0].get("sentence_info") or []
@@ -2670,12 +2041,6 @@ def transcribe_recording(recording_id: str, user: dict[str, Any], segment_second
         merged_segments = sentence_info_to_transcript_segments(sentence_info, hotwords, speaker_matches)
         with db() as conn:
             update_task(conn, task_id, "running", 90)
-            # 到这里 ASR 已经成功，才动旧数据：删除与写入在同一个事务里，中途
-            # 出错会整体回滚，不会留下半份稿子。
-            conn.execute("delete from transcript_segments where recording_id = ?", (recording_id,))
-            conn.execute("delete from summaries where recording_id = ?", (recording_id,))
-            conn.execute("delete from emotion_analyses where recording_id = ?", (recording_id,))
-            conn.execute("update recordings set summary_status = ? where id = ?", ("pending", recording_id))
             inserted = 0
             for item in merged_segments:
                 conn.execute(
@@ -2700,21 +2065,17 @@ def transcribe_recording(recording_id: str, user: dict[str, Any], segment_second
                 inserted += 1
             if inserted == 0:
                 raise RuntimeError("ASR returned no usable transcript segments")
-            spk_count = len({row.get("spk", "unknown") for row in sentence_info})
             conn.execute(
-                "update recordings set asr_status = ?, speaker_count = ?, updated_at = ? where id = ?",
-                ("done", spk_count, now(), recording_id),
+                "update recordings set asr_status = ?, updated_at = ? where id = ?",
+                ("done", now(), recording_id),
             )
-            hits = record_hotword_hits(conn, recording_id)
             update_task(conn, task_id, "done", 100)
+            spk_count = len({row.get("spk", "unknown") for row in sentence_info})
             audit(
                 conn,
                 user,
                 "recording",
-                f"完成录音转写和说话人分离：{rec['title']}，生成 {inserted} 个语义发言段，"
-                f"检测到 {spk_count} 个说话人，使用热词 {package['asr_terms_count']} 条"
-                f"（会前上下文 {package.get('context_terms_count', 0)} 条），"
-                f"命中热词 {hits['global_words']} 个。",
+                f"完成录音转写和说话人分离：{rec['title']}，生成 {inserted} 个语义发言段，检测到 {spk_count} 个说话人，使用热词 {package['asr_terms_count']} 条。",
             )
         return {"recording_id": recording_id, "segments": inserted, "speakers": spk_count}
     except Exception as exc:
@@ -2755,6 +2116,82 @@ def summary_depth_instruction(rec: dict[str, Any], text: str) -> str:
     return target
 
 
+def meeting_focus_instruction(meeting_type: str) -> str:
+    if meeting_type == "内部会议":
+        return (
+            "会议类型是内部会议。重点沉淀：销售/项目复盘脉络、客户或商机名称、项目阶段、现场判断、争议点、"
+            "资源/报价/方案/交付边界等讨论内容。不要写行动项或跟进清单。"
+        )
+    if meeting_type == "客户调研":
+        return (
+            "会议类型是客户调研。重点沉淀：客户业务背景、当前系统与流程、涉及部门/岗位、痛点或关注点、"
+            "预算/周期/范围等被明确提到的信息、客户原话和待澄清点。不要生成客户需求库。"
+        )
+    if meeting_type == "方案汇报":
+        return (
+            "会议类型是方案汇报。重点沉淀：方案范围、模块能力、客户反馈、异议与澄清、部署/集成/数据口径、"
+            "报价或边界讨论、达成共识与仍需确认的问题。"
+        )
+    if meeting_type == "销售电话":
+        return (
+            "会议类型是销售电话。重点沉淀：客户/联系人、来电背景、关注问题、产品或服务匹配点、价格/周期/竞品/决策链线索、"
+            "对话中的明确结论和待确认问题。"
+        )
+    return "根据会议类型保留业务背景、讨论细节、明确结论、待确认问题和可追溯原文证据。"
+
+
+def meeting_template(meeting_type: str) -> str:
+    """每类会议的专属纪要结构骨架。AI 按对应结构逐节输出，无内容的小节写“未明确”。
+    顶部「会议信息/一句话概览」与底部「关键原文证据」是所有类型共用的壳，
+    中间板块按会议类型切换。"""
+    head = ["# 会议纪要", "## 会议信息", "## 一句话概览"]
+    foot = ["## 关键原文证据"]
+    bodies = {
+        "销售电话": [
+            "## 通话背景（客户 / 联系人 / 来电由头）",
+            "## 客户现状与关注点",
+            "## 产品 / 服务匹配讨论",
+            "## 价格 / 周期 / 竞品 / 决策链线索",
+            "## 关键结论",
+            "## 待确认问题",
+        ],
+        "客户调研": [
+            "## 客户业务背景",
+            "## 当前系统与流程现状",
+            "## 涉及部门 / 岗位",
+            "## 痛点与关注点",
+            "## 预算 / 周期 / 范围（已明确提到的）",
+            "## 客户原话与待澄清点",
+        ],
+        "方案汇报": [
+            "## 方案范围与模块能力",
+            "## 客户反馈",
+            "## 异议与澄清",
+            "## 部署 / 集成 / 数据口径",
+            "## 报价与边界讨论",
+            "## 达成共识与仍需确认",
+        ],
+        "内部会议": [
+            "## 复盘主线（客户 / 商机 / 项目阶段）",
+            "## 各汇报人分述（能识别汇报人时每人一节，逐个过其名下项目：阶段/卡点/策略/结论）",
+            "## 争议点",
+            "## 资源 / 报价 / 方案 / 交付边界",
+            "## 关键结论",
+            "## 待确认问题",
+        ],
+    }
+    default_body = [
+        "## 核心摘要",
+        "## 讨论主线",
+        "## 重点议题详述",
+        "## 客户 / 项目 / 商机信息沉淀",
+        "## 关键结论",
+        "## 待确认问题",
+    ]
+    body = bodies.get((meeting_type or "").strip(), default_body)
+    return "\n".join(head + body + foot)
+
+
 def env_int(name: str, default: int, minimum: int, maximum: int) -> int:
     try:
         value = int(os.environ.get(name, str(default)))
@@ -2769,23 +2206,6 @@ def env_float(name: str, default: float, minimum: float, maximum: float) -> floa
     except ValueError:
         value = default
     return max(minimum, min(value, maximum))
-
-
-def env_bool(name: str, default: bool = False) -> bool:
-    raw = os.environ.get(name)
-    if raw is None:
-        return default
-    return raw.strip().lower() in {"1", "true", "yes", "on"}
-
-
-def env_json(name: str, default: Any) -> Any:
-    raw = os.environ.get(name, "").strip()
-    if not raw:
-        return default
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        return default
 
 
 async def _deepseek_post_with_retry(
@@ -2813,37 +2233,15 @@ async def _deepseek_post_with_retry(
             break
         if res.status_code < 400:
             data = res.json()
-            choice = (data.get("choices") or [{}])[0]
+            choice = data["choices"][0]
             message = choice.get("message") or {}
-            content = message.get("content") or ""
-            # 撞上长度上限有两种表现，此前只处理了第一种：
-            #   · 内容为空——推理模型把预算全烧在思考上，接口 200 但 content 空
-            #   · 内容写到一半——看起来成功，实际是断的。一份「李总回应"」结尾的
-            #     纪要比整段失败更糟，因为它不声不响地入了库
-            # 所以判断只看 finish_reason，不看内容是否为空。
-            reasoning = len(message.get("reasoning_content") or "")
-            truncated = choice.get("finish_reason") == "length"
-            budget = int(payload.get("max_tokens") or 0)
-            if truncated and budget and budget < 32768 and attempt < attempts - 1:
-                payload = {**payload, "max_tokens": min(32768, budget * 2)}
-                last_error = (
-                    f"输出被 max_tokens={budget} 截断"
-                    + (f"（推理占了 {reasoning} 字）" if reasoning else "")
-                    + f"；提到 {payload['max_tokens']} 后重试"
-                )
-                continue
-            if not content.strip():
+            content = (message.get("content") or "").strip()
+            if not content:
+                reasoning_chars = len(message.get("reasoning_content") or "")
+                finish_reason = choice.get("finish_reason") or "unknown"
                 raise RuntimeError(
-                    "大模型返回空内容"
-                    + (f"（推理占了 {reasoning} 字，max_tokens 预算不够）" if reasoning else "")
-                    + f"，finish_reason={choice.get('finish_reason')}"
-                )
-            if truncated:
-                # 重试用尽仍然截断。丢掉几千字不如交出去并说清楚——但必须让用户
-                # 看得见，否则他会把半截当全文。
-                content += (
-                    f"\n\n> ⚠️ 本次输出在 max_tokens={budget} 处被模型截断，以上内容不完整。"
-                    f"提高 AHAMVOICE_SUMMARY_FINAL_MAX_TOKENS 后重新生成可得到完整版本。\n"
+                    "LLM returned empty content "
+                    f"(finish_reason={finish_reason}, reasoning_chars={reasoning_chars})"
                 )
             return content
         last_error = f"HTTP {res.status_code}: {res.text[:500]}"
@@ -2851,95 +2249,18 @@ async def _deepseek_post_with_retry(
             await asyncio.sleep(2 * (attempt + 1))
             continue
         break
-    raise RuntimeError(f"大模型请求失败: {last_error}")
-
-
-def summary_acoustic_hint(rec: dict[str, Any]) -> str:
-    """本次录音的声学情绪，作为纪要的判断依据。
-
-    只取已经聚合过的那张表（每个说话人一行）加最多 12 条负面强片段——在一段
-    42 分钟会议上约 2100 字，只占转写全文的 15%。逐段情绪有 222 条、两万字，
-    比稿子本身还长，不喂。
-
-    只放进最终合成那一步，不放进每个分块，否则要乘以块数。判断"客户在报价
-    环节有抵触"本来也是通盘看完才下的。
-    """
-    with db() as conn:
-        row = rowdict(
-            conn.execute(
-                "select content from emotion_analyses where recording_id = ? and is_current = 1"
-                " order by version desc limit 1",
-                (rec["id"],),
-            ).fetchone()
-        )
-    content = str((row or {}).get("content") or "").strip()
-    if not content:
-        return ""
-    marker = "## 声学情绪分布"
-    acoustic = content[content.index(marker):] if marker in content else content
-    return (
-        "\n以下是本次录音的声学情绪识别结果（emotion2vec 逐段分析后聚合，"
-        "与转写文字相互独立）。写纪要时可以据此判断各方态度——例如某个议题上"
-        "负面情绪集中，说明当时存在分歧或抵触。但它只是声学线索，不要单凭它下"
-        "结论，要和转写内容对上才写。\n\n" + acoustic[:4000] + "\n"
-    )
-
-
-def summary_term_hint(rec: dict[str, Any]) -> str:
-    """把这场会的背景和专名交给纪要模型。
-
-    这是整条链路上性价比最高的一处。实测同一段稿子：不给列表时纪要照抄了错的
-    「ADV」，给了之后自动写成「AGV」。而「冒陌」「WWS」这类两种情况下都能从
-    上下文推对——所以真正需要提示的，是那些本身也像合法专名的错法。
-
-    比起先去修稿子，这里只多几十个 token，且不改用户的转写。
-    """
-    with db() as conn:
-        terms = [
-            str(row["word"])
-            for row in conn.execute(
-                "select word from hotwords where active = 1 and coalesce(state,'active') in ('active','protected')"
-                " order by length(word) desc limit 150"
-            ).fetchall()
-        ]
-        terms += [
-            str(row["term"])
-            for row in conn.execute(
-                "select term from recording_hotwords where recording_id = ?", (rec["id"],)
-            ).fetchall()
-        ]
-        row = rowdict(
-            conn.execute(
-                "select briefing from recording_contexts where recording_id = ?", (rec["id"],)
-            ).fetchone()
-        )
-    briefing = str((row or {}).get("briefing") or "").strip()
-    unique = list(dict.fromkeys(term for term in terms if term.strip()))
-
-    parts: list[str] = []
-    if briefing:
-        # 用户在助手里讲的会前背景。此前只用来提取专名，那段话本身没人读——
-        # 而它恰恰交代了谁是谁、这场会要谈什么，是纪要最缺的上下文。
-        parts.append(f"\n会前背景（由用户提供，可信度高于转写）：{briefing[:1200]}\n")
-    if unique:
-        parts.append(
-            "\n本次会议涉及的专有名词：" + "、".join(unique[:150]) + "。\n"
-            "转写可能把它们听错（英文缩写尤其容易，例如 AGV 被听成 ADV、MOM 被听成「冒目」），"
-            "你在纪要里必须写正确的专名，不要照抄稿子里的错写法。\n"
-        )
-    return "".join(parts)
+    raise RuntimeError(f"DeepSeek request failed: {last_error}")
 
 
 async def call_deepseek_summary(text: str, rec: dict[str, Any]) -> tuple[str, str]:
     api_key, base, model = get_llm_config()
     if not api_key:
-        raise RuntimeError("大模型 API Key 未配置")
-    term_hint = summary_term_hint(rec)
+        raise RuntimeError("DEEPSEEK_API_KEY is not configured")
 
-    chunk_chars = env_int("AHAMVOICE_SUMMARY_CHUNK_CHARS", 18000, 8000, 28000)
+    chunk_chars = env_int("NEWVOICE_SUMMARY_CHUNK_CHARS", 18000, 8000, 28000)
     chunks = [text[i : i + chunk_chars] for i in range(0, len(text), chunk_chars)] or [""]
     depth = summary_depth_instruction(rec, text)
-    acoustic_hint = summary_acoustic_hint(rec)
+    focus = meeting_focus_instruction(rec.get("meeting_type") or "")
     partials: list[str] = []
     chat_url = f"{base}/chat/completions"
     async with httpx.AsyncClient(timeout=180, trust_env=False) as client:
@@ -2947,7 +2268,7 @@ async def call_deepseek_summary(text: str, rec: dict[str, Any]) -> tuple[str, st
             payload = {
                 "model": model,
                 "temperature": 0.2,
-                "max_tokens": env_int("AHAMVOICE_SUMMARY_CHUNK_MAX_TOKENS", 8192, 1200, 32768),
+                "max_tokens": env_int("NEWVOICE_SUMMARY_CHUNK_MAX_TOKENS", 8192, 1200, 8192),
                 "messages": [
                     {
                         "role": "system",
@@ -2974,19 +2295,22 @@ async def call_deepseek_summary(text: str, rec: dict[str, Any]) -> tuple[str, st
                             "### 结论与待确认\n"
                             "### 可引用原文证据\n\n"
                             f"录音标题：{rec['title']}\n"
+                            f"会议类型：{rec['meeting_type']}\n"
                             f"分块：{index}/{len(chunks)}\n\n"
-                            f"{term_hint}\n"
+                            f"{focus}\n\n"
                             f"{chunk}"
                         ),
                     },
                 ],
             }
+            if "deepseek" in base.lower() or model.lower().startswith("deepseek"):
+                payload["thinking"] = {"type": "disabled"}
             partials.append(await _deepseek_post_with_retry(client, chat_url, api_key, payload))
 
         final_payload = {
             "model": model,
             "temperature": 0.2,
-            "max_tokens": env_int("AHAMVOICE_SUMMARY_FINAL_MAX_TOKENS", 16384, 2000, 32768),
+            "max_tokens": env_int("NEWVOICE_SUMMARY_FINAL_MAX_TOKENS", 8192, 2000, 12000),
             "messages": [
                 {
                     "role": "system",
@@ -2996,7 +2320,7 @@ async def call_deepseek_summary(text: str, rec: dict[str, Any]) -> tuple[str, st
                         "重要：转写里的公司/项目/人名可能被语音识别带偏或张冠李戴——突兀的长全称"
                         "（尤其含“有限公司/集团”且只出现一两次的）不要当成标准项目名，优先用口语高频的简称；"
                         "同一项目出现多个候选名时取最一致的那个；项目归属（谁负责/哪个客户）拿不准就标“疑似”，绝不硬编。"
-                        "禁止输出或提及行动项、待办、下一步、风险、客户需求、CRM 跟进模块。"
+                        "禁止输出或提及行动项、待办、下一步、风险、客户需求或外部跟进模块。"
                     ),
                 },
                 {
@@ -3004,33 +2328,32 @@ async def call_deepseek_summary(text: str, rec: dict[str, Any]) -> tuple[str, st
                     "content": (
                         f"请将以下分块素材合并为最终纪要。纪要要比普通摘要更丰富，适合销售经理或项目负责人回看会议全貌。\n\n"
                         f"标题：{rec['title']}\n"
+                        f"会议类型：{rec['meeting_type']}\n"
                         f"录音时长：{rec['duration_label']}\n\n"
                         f"深度要求：{depth}\n"
-                        f"{term_hint}"
-                        f"{acoustic_hint}"
+                        f"类型侧重点：{focus}\n\n"
                         "写作要求：\n"
                         "- 先给整体判断，再按议题展开细节；不要把所有内容压成三五条。\n"
-                        "- 每个重点议题尽量包含：背景/上下文、讨论细节、相关人或客户态度、明确结论、待确认问题。\n"
+                        "- 每个重点议题尽量包含：背景/上下文、讨论细节、相关人或客户态度、明确结论、待确认问题、时间戳证据。\n"
                         "- 对长会议，要按客户/项目/模块/流程分组，合并重复表达，但保留具体名称和关键数字。\n"
-                        "- 时间戳要克制：只在最关键的结论或争议点后面附一个，全篇不超过 10 处，"
-                        "且分散覆盖主要议题、不要集中在开头几分钟。绝大多数句子不该带时间戳——"
-                        "读的人要的是判断，不是逐条索引。\n"
+                        "- 关键原文证据要分散覆盖主要议题，不要只引用开头几分钟。\n"
                         "- 不要出现“行动项”“待办”“下一步”“跟进事项”等表述。\n\n"
                         "请严格按以下结构输出（小节标题和顺序保持不变；某节无内容就写“未明确”，不要删节也不要新增顶级小节）：\n"
-                        + "\n\n"
+                        + meeting_template(rec.get("meeting_type") or "") + "\n\n"
                         + "\n\n".join(partials)
                     ),
                 },
             ],
         }
+        if "deepseek" in base.lower() or model.lower().startswith("deepseek"):
+            final_payload["thinking"] = {"type": "disabled"}
         return await _deepseek_post_with_retry(client, chat_url, api_key, final_payload), model
 
 
 async def call_deepseek_revision(instruction: str, base_summary: str, transcript: str, rec: dict[str, Any]) -> tuple[str, str]:
     api_key, base, model = get_llm_config()
     if not api_key:
-        raise RuntimeError("大模型 API Key 未配置")
-    term_hint = summary_term_hint(rec)
+        raise RuntimeError("DEEPSEEK_API_KEY is not configured")
 
     if len(transcript) <= 26000:
         transcript_context = transcript
@@ -3041,10 +2364,11 @@ async def call_deepseek_revision(instruction: str, base_summary: str, transcript
             + transcript[-9000:]
         )
     depth = summary_depth_instruction(rec, transcript)
+    focus = meeting_focus_instruction(rec.get("meeting_type") or "")
     payload = {
         "model": model,
         "temperature": 0.2,
-        "max_tokens": env_int("AHAMVOICE_SUMMARY_FINAL_MAX_TOKENS", 16384, 2000, 32768),
+        "max_tokens": env_int("NEWVOICE_SUMMARY_FINAL_MAX_TOKENS", 8192, 2000, 12000),
         "messages": [
             {
                 "role": "system",
@@ -3052,16 +2376,18 @@ async def call_deepseek_revision(instruction: str, base_summary: str, transcript
                     "你是企业内部会议纪要助手。根据用户修改要求重写完整 Markdown 纪要。"
                     "保持信息丰富、结构清楚、可追溯；只基于原纪要和转写文本，不编造事实。"
                     "转写里的公司/项目/人名可能被语音识别带偏——突兀的长全称不要当标准名、优先口语简称，归属拿不准标“疑似”。"
-                    "禁止输出或提及行动项、待办、下一步、风险、客户需求、CRM 跟进模块。"
+                    "禁止输出或提及行动项、待办、下一步、风险、客户需求或外部跟进模块。"
                 ),
             },
             {
                 "role": "user",
                 "content": (
                     f"录音标题：{rec['title']}\n"
+                    f"会议类型：{rec['meeting_type']}\n"
                     f"录音时长：{rec['duration_label']}\n\n"
                     f"深度要求：{depth}\n"
-                    f"{term_hint}"
+                    f"类型侧重点：{focus}\n\n"
+                    f"目标结构（除非用户明确要求改结构，否则按此组织小节）：\n{meeting_template(rec.get('meeting_type') or '')}\n\n"
                     f"用户修改要求：\n{instruction}\n\n"
                     f"当前纪要：\n{base_summary}\n\n"
                     f"转写文本校验依据：\n{transcript_context}\n\n"
@@ -3070,6 +2396,8 @@ async def call_deepseek_revision(instruction: str, base_summary: str, transcript
             },
         ],
     }
+    if "deepseek" in base.lower() or model.lower().startswith("deepseek"):
+        payload["thinking"] = {"type": "disabled"}
     async with httpx.AsyncClient(timeout=180, trust_env=False) as client:
         content = await _deepseek_post_with_retry(client, f"{base}/chat/completions", api_key, payload)
     return content, model
@@ -3124,6 +2452,87 @@ async def summarize_recording(recording_id: str, user: dict[str, Any]) -> dict[s
             update_task(conn, task_id, "failed", 100, str(exc))
             audit(conn, user, "summary", f"DeepSeek 调用失败：{rec['title']}。")
         raise HTTPException(status_code=500, detail=f"summary generation failed: {exc}") from exc
+
+
+def summary_payload(rec: dict[str, Any], summary: dict[str, Any] | None) -> dict[str, Any] | None:
+    """One additive evidence contract for browser and MCP; drafts are separate."""
+    if summary is None:
+        return None
+    return {**summary, "evidence": {"kind": "transcript", "recording_id": rec["id"], "title": rec["title"]}}
+
+
+def revision_pipeline_busy(conn: sqlite3.Connection, rec: dict[str, Any]) -> bool:
+    # A queued summary_only job may still leave summary_status='done'.
+    return rec["asr_status"] != "done" or rec["summary_status"] in ("running", "queued") or bool(conn.execute(
+        "select 1 from voice_jobs where recording_id=? and status in ('queued','running','retry','blocked','conflict') limit 1",
+        (rec["id"],),
+    ).fetchone())
+
+
+async def preview_summary_revision(recording_id: str, instruction: str, user: dict[str, Any]) -> dict[str, Any]:
+    instruction = instruction.strip()
+    if not instruction:
+        raise HTTPException(400, "请填写纪要修改要求")
+    with db() as conn:
+        rec = can_access_recording(conn, recording_id, user)
+        if revision_pipeline_busy(conn, rec):
+            raise HTTPException(409, "请等待当前处理完成")
+        base = rowdict(conn.execute("select * from summaries where recording_id=? order by is_current desc,version desc,created_at desc limit 1", (recording_id,)).fetchone())
+        text = transcript_text(conn, recording_id)
+        if not base or not base["content"].strip() or not text.strip():
+            raise HTTPException(409, "需要有效的纪要和逐字稿才能生成改写预览")
+    # Generation never replaces content or changes the recording's status.
+    try:
+        content, model = await call_deepseek_revision(instruction, base["content"], text, rec)
+        if not content.strip():
+            raise ValueError("改写结果为空，请重试")
+    except Exception as exc:
+        raise HTTPException(502, "生成改写预览失败，请重试") from exc
+    draft_id, created_at = str(uuid.uuid4()), now()
+    with db() as conn:
+        can_access_recording(conn, recording_id, user)
+        conn.execute("delete from summary_revision_drafts where expires_at<? and applied_summary_id is null", (time.time(),))
+        conn.execute("""insert into summary_revision_drafts
+            (id,recording_id,user_id,base_summary_id,transcript_hash,instruction,content,model,created_at,expires_at)
+            values(?,?,?,?,?,?,?,?,?,?)""", (draft_id, recording_id, user["id"], base["id"], hashlib.sha256(text.encode()).hexdigest(), instruction, content, model, created_at, time.time() + 86400))
+    return {"draft_id": draft_id, "recording_id": recording_id, "base_summary_id": base["id"],
+            "base_content": base["content"], "content": content, "model": model, "created_at": created_at,
+            "status": "awaiting_confirmation", "evidence": {"kind": "transcript", "recording_id": recording_id, "title": rec["title"]}}
+
+
+def apply_summary_revision(recording_id: str, draft_id: str, user: dict[str, Any]) -> dict[str, Any]:
+    with db() as conn:
+        # Serialize confirmation with concurrent confirmations and worker writes.
+        conn.execute("begin immediate")
+        rec = can_access_recording(conn, recording_id, user)
+        draft = rowdict(conn.execute("select * from summary_revision_drafts where id=? and recording_id=? and user_id=?", (draft_id, recording_id, user["id"])).fetchone())
+        if not draft:
+            raise HTTPException(404, "改写预览不存在，请重新生成")
+        if draft["applied_summary_id"]:
+            applied = conn.execute("select id,version,model from summaries where id=? and recording_id=?", (draft["applied_summary_id"], recording_id)).fetchone()
+            if not applied:
+                raise HTTPException(409, "原纪要已重新处理，请刷新页面")
+            return {"recording_id": recording_id, "summary_id": applied["id"], "version": applied["version"], "model": applied["model"]}
+        if draft["expires_at"] < time.time():
+            raise HTTPException(409, "改写预览已过期，请重新生成")
+        if revision_pipeline_busy(conn, rec):
+            raise HTTPException(409, "录音正在处理，请等待完成后重新生成预览")
+        current = conn.execute("select id from summaries where recording_id=? order by is_current desc,version desc,created_at desc limit 1", (recording_id,)).fetchone()
+        text_hash = hashlib.sha256(transcript_text(conn, recording_id).encode()).hexdigest()
+        if not current or current["id"] != draft["base_summary_id"] or text_hash != draft["transcript_hash"]:
+            raise HTTPException(409, "纪要或逐字稿已有更新，请重新生成预览后确认")
+        summary_id, version, stamp = str(uuid.uuid4()), next_summary_version(conn, recording_id), now()
+        conn.execute("update summaries set is_current=0 where recording_id=?", (recording_id,))
+        conn.execute("""insert into summaries(id,recording_id,content,model,created_at,version,instruction,base_summary_id,is_current)
+            values(?,?,?,?,?,?,?,?,1)""", (summary_id, recording_id, draft["content"], draft["model"], stamp, version, draft["instruction"], draft["base_summary_id"]))
+        conn.execute("update summary_revision_drafts set applied_summary_id=? where id=?", (summary_id, draft_id))
+        conn.execute("update recordings set summary_status='done',updated_at=? where id=?", (stamp, recording_id))
+        # The processing helpers commit internally. Insert this completed event
+        # directly so the version, draft marker and audit share one transaction.
+        conn.execute("""insert into tasks(id,recording_id,recording_title,step,status,progress,created_at,updated_at,started_at,finished_at)
+            values(?,?,?,?,'done',100,?,?,?,?)""", (str(uuid.uuid4()), recording_id, rec["title"], "确认应用纪要改写", stamp, stamp, stamp, stamp))
+        audit(conn, user, "summary", f"确认应用纪要改写：{rec['title']}，版本 v{version}。")
+    return {"recording_id": recording_id, "summary_id": summary_id, "version": version, "model": draft["model"]}
 
 
 async def revise_summary(recording_id: str, instruction: str, user: dict[str, Any]) -> dict[str, Any]:
@@ -3196,7 +2605,7 @@ def transcript_markdown(conn: sqlite3.Connection, rec: dict[str, Any]) -> str:
     return (
         f"# {rec['title']} 转写\n\n"
         "## 录音信息\n\n"
-
+        f"- 会议类型：{rec['meeting_type']}\n"
         f"- 客户 / 项目：{rec.get('tag') or '-'}\n"
         f"- 录音时长：{rec['duration_label']}\n"
         "- ASR 引擎：Paraformer + FSMN-VAD + CT-Punc + CAM++\n"
@@ -3289,14 +2698,11 @@ def get_emotion_model() -> Any:
     if _emotion_model is None:
         with _emotion_init_lock:
             if _emotion_model is None:
-                emotion_path = models_hub.model_path("emotion")
-                if not emotion_path.exists():
-                    raise RuntimeError(
-                        "缺少声学情绪模型。请到「设置 → 本地模型」下载「声学情绪 (emotion2vec+)」。"
-                    )
+                if not EMOTION.exists():
+                    raise RuntimeError(f"情绪模型缺失：{EMOTION}")
                 from funasr import AutoModel
 
-                _emotion_model = AutoModel(model=str(emotion_path), disable_update=True)
+                _emotion_model = AutoModel(model=str(EMOTION), device=ASR_DEVICE, disable_update=True)
     return _emotion_model
 
 
@@ -3404,14 +2810,14 @@ def emotion_annotated_transcript(conn: sqlite3.Connection, recording_id: str, pe
 def call_deepseek_emotion(annotated_transcript: str, rec: dict[str, Any], acoustic_md: str) -> tuple[str, str]:
     api_key, base, model = get_llm_config()
     if not api_key:
-        raise RuntimeError("大模型 API Key 未配置")
+        raise RuntimeError("DEEPSEEK_API_KEY is not configured")
     transcript = annotated_transcript
     if len(transcript) > 48000:
         transcript = transcript[:26000] + "\n\n[中间过长省略，仅保留首尾]\n\n" + transcript[-18000:]
     payload = {
         "model": model,
         "temperature": 0.3,
-        "max_tokens": env_int("AHAMVOICE_EMOTION_MAX_TOKENS", 12000, 2000, 32768),
+        "max_tokens": env_int("NEWVOICE_EMOTION_MAX_TOKENS", 6000, 2000, 12000),
         "messages": [
             {
                 "role": "system",
@@ -3420,13 +2826,13 @@ def call_deepseek_emotion(annotated_transcript: str, rec: dict[str, Any], acoust
                     "“（声学:情绪+置信）”来自语音情绪模型，是辅助证据，要结合说话内容判断，不要照搬数字。"
                     "重点突出情绪本身：整体氛围松紧、各方参与度、是否有防御 / 抵触 / 不耐烦 / 敷衍 / 热情，以及客户的购买意向信号和异议顾虑。"
                     "只基于转写内容，不编造；不确定的写“疑似”。"
-                    "严禁输出行动项、待办、下一步、跟进建议或任何 CRM 模块——这是情绪分析，不是会议纪要。"
+                    "严禁输出行动项、待办、下一步、跟进建议或任何外部业务模块——这是情绪分析，不是会议纪要。"
                 ),
             },
             {
                 "role": "user",
                 "content": (
-                    f"录音标题：{rec.get('title')}\n时长：{rec.get('duration_label')}\n\n"
+                    f"录音标题：{rec.get('title')}\n会议类型：{rec.get('meeting_type')}\n时长：{rec.get('duration_label')}\n\n"
                     "请严格按以下结构输出 Markdown（小节顺序不变；无内容的小节写“未明确”）：\n"
                     "# 对话情绪分析\n"
                     "## 整体情绪基调\n"
@@ -3441,6 +2847,8 @@ def call_deepseek_emotion(annotated_transcript: str, rec: dict[str, Any], acoust
             },
         ],
     }
+    if "deepseek" in base.lower() or model.lower().startswith("deepseek"):
+        payload["thinking"] = {"type": "disabled"}
     chat_url = f"{base}/chat/completions"
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     last_err: Any = None
@@ -3454,7 +2862,16 @@ def call_deepseek_emotion(annotated_transcript: str, rec: dict[str, Any], acoust
                     continue
                 if res.status_code >= 400:
                     raise RuntimeError(f"DeepSeek HTTP {res.status_code}: {res.text[:300]}")
-                return res.json()["choices"][0]["message"]["content"], model
+                choice = res.json()["choices"][0]
+                message = choice.get("message") or {}
+                content = (message.get("content") or "").strip()
+                if not content:
+                    raise RuntimeError(
+                        "LLM returned empty content "
+                        f"(finish_reason={choice.get('finish_reason') or 'unknown'}, "
+                        f"reasoning_chars={len(message.get('reasoning_content') or '')})"
+                    )
+                return content, model
             except httpx.RequestError as exc:
                 last_err = exc
                 time.sleep(1.5 * (attempt + 1))
@@ -3483,16 +2900,7 @@ def current_emotion_analysis(conn: sqlite3.Connection, recording_id: str) -> dic
     )
 
 
-def generate_emotion_analysis(
-    recording_id: str, user: dict[str, Any], with_narrative: bool = True
-) -> dict[str, Any]:
-    """Acoustic emotion per segment, plus an optional written analysis.
-
-    `with_narrative=False` keeps only the acoustic table. Nothing calls it that
-    way today: the narrative is what the emotion view is for, and skipping it
-    left that page showing a bare table forever. It stays as an option for a
-    caller that genuinely only needs the numbers.
-    """
+def generate_emotion_analysis(recording_id: str, user: dict[str, Any]) -> dict[str, Any]:
     with db() as conn:
         rec = can_access_recording(conn, recording_id, user)
         if rec["asr_status"] != "done":
@@ -3512,15 +2920,11 @@ def generate_emotion_analysis(
     try:
         per_segment, per_speaker = analyze_acoustic_emotions(rec, segments)
         acoustic_md = acoustic_markdown(per_speaker, per_segment)
-        if with_narrative:
-            with db() as conn:
-                annotated = emotion_annotated_transcript(conn, recording_id, per_segment)
-            analysis_md, model = call_deepseek_emotion(annotated, rec, acoustic_md)
-            content = analysis_md.rstrip() + "\n\n" + acoustic_md + "\n"
-            model_label = f"emotion2vec_plus_large + {model}"
-        else:
-            content = acoustic_md + "\n"
-            model_label = "emotion2vec_plus_large"
+        with db() as conn:
+            annotated = emotion_annotated_transcript(conn, recording_id, per_segment)
+        analysis_md, model = call_deepseek_emotion(annotated, rec, acoustic_md)
+        content = analysis_md.rstrip() + "\n\n" + acoustic_md + "\n"
+        model_label = f"emotion2vec_plus_large + {model}"
         with db() as conn:
             emotion_id = str(uuid.uuid4())
             conn.execute("update emotion_analyses set is_current = 0 where recording_id = ?", (recording_id,))
@@ -3563,16 +2967,6 @@ def run_emotion_job(recording_id: str, user: dict[str, Any]) -> None:
 def process_recording_background(recording_id: str, user: dict[str, Any]) -> None:
     try:
         transcribe_recording(recording_id, user)
-        # 情绪排在纪要之前：纪要要拿它的声学数据。失败不该拖垮纪要——纪要是主
-        # 输出，而情绪只是给它加一层判断依据。
-        #
-        # 这里生成完整的情绪分析（含解读）。纪要取用的是其中的声学表，不是解读
-        # ——那段解读是情绪页面自己的内容，不是给纪要绕一道的中间产物。
-        try:
-            generate_emotion_analysis(recording_id, user)
-        except Exception as exc:
-            with db() as conn:
-                audit(conn, user, "emotion", f"情绪分析失败，纪要将不带声学依据：{exc}")
         asyncio.run(summarize_recording(recording_id, user))
     except HTTPException:
         return
@@ -3588,12 +2982,7 @@ def process_recording_background(recording_id: str, user: dict[str, Any]) -> Non
 @app.on_event("startup")
 def startup() -> None:
     ensure_schema()
-    ensure_local_user()
-    runtime_port = os.environ.get("AHAMVOICE_PORT")
-    if runtime_port and runtime_port.isdigit():
-        write_runtime_file(int(runtime_port))
-    recover_interrupted_tasks()
-    recover_queued_recordings()
+    voice_integration.ensure_schema()
     _start_cleanup_loop()
 
 
@@ -3631,6 +3020,7 @@ def login(payload: dict[str, str]) -> dict[str, Any]:
                 "update users set failed_login_count = ?, locked_until = ?, updated_at = ? where id = ?",
                 (failed, locked_until, now(), user["id"]),
             )
+            conn.commit()  # Persist lockout even though the request raises below.
             raise HTTPException(status_code=401, detail="账号或密码错误")
         token = create_session(conn, user["id"])
         conn.execute(
@@ -3675,18 +3065,20 @@ def me(user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
     return user
 
 
+# ---------------------------------------------------------------------------
+# 大模型（LLM）配置端点 —— 对齐 aham-voice 开源版。
+# 配置是全局单份(存 config.json),读取对登录用户开放;写入/测试限管理员
+# (orchisky 多用户语义,不同于 aham 单用户的全放行)。
+# ---------------------------------------------------------------------------
 def _settings_view() -> dict[str, Any]:
     api_key, base, model = get_llm_config()
     provider = get_llm_provider()
     return {
-        # Generic LLM fields (preferred).
         "llm_configured": bool(api_key),
         "llm_api_base": base,
         "llm_model": model,
         "llm_provider": provider,
-        "voiceprint_autolearn": voiceprint_autolearn_enabled(),
-        # Legacy DeepSeek aliases retained so older frontend code / caches keep
-        # working. They mirror the generic values above.
+        # legacy DeepSeek 别名,兼容旧前端缓存
         "deepseek_configured": bool(api_key),
         "deepseek_api_base": base,
         "deepseek_model": model,
@@ -3703,10 +3095,8 @@ def patch_settings(
     payload: dict[str, Any] = Body(...),
     user: dict[str, Any] = Depends(current_user),
 ) -> dict[str, Any]:
+    require_admin(user)
     updates: dict[str, Any] = {}
-    # An empty string explicitly clears the stored value. Both the generic
-    # `llm_*` keys and the legacy `deepseek_*` keys are accepted; the generic
-    # ones take precedence when both appear in the same request.
 
     def _pick(*keys: str) -> str | None:
         for key in keys:
@@ -3717,7 +3107,7 @@ def patch_settings(
     api_key = _pick("llm_api_key", "deepseek_api_key")
     if api_key is not None:
         updates["llm_api_key"] = api_key
-        updates["deepseek_api_key"] = api_key  # keep legacy key in sync
+        updates["deepseek_api_key"] = api_key
 
     api_base = _pick("llm_api_base", "deepseek_api_base")
     if api_base is not None:
@@ -3734,12 +3124,10 @@ def patch_settings(
     if "llm_provider" in payload:
         updates["llm_provider"] = (payload.get("llm_provider") or "").strip()
 
-
-    if "voiceprint_autolearn" in payload:
-        updates["voiceprint_autolearn"] = bool(payload.get("voiceprint_autolearn"))
-
     if updates:
         save_user_config(updates)
+        with db() as conn:
+            audit(conn, user, "settings.update", f"{user['name']} 更新了大模型配置。")
     return _settings_view()
 
 
@@ -3748,22 +3136,12 @@ async def test_settings(
     payload: dict[str, Any] | None = Body(default=None),
     user: dict[str, Any] = Depends(current_user),
 ) -> dict[str, Any]:
-    """Probe the configured (or temporarily overridden) LLM endpoint.
-
-    Sends a minimal OpenAI-compatible chat-completions request so the user can
-    confirm the key/base/model actually work before relying on them for
-    summaries. An optional JSON body may override the stored config field by
-    field — handy when the user has typed a key/base/model but not saved yet:
-
-        {"api_key"?: str, "api_base"?: str, "model"?: str}
-
-    Returns `{ok, model, latency_ms, error?}`. Errors are friendly Chinese
-    strings; full response bodies, stack traces and the key are never leaked.
-    """
+    """探测当前(或临时覆盖的)LLM 端点是否可用。可选 body 覆盖 api_key/api_base/model。
+    返回 {ok, model, latency_ms, error?}。错误为友好中文,不泄露 key/堆栈。"""
+    require_admin(user)
     body = payload if isinstance(payload, dict) else {}
     api_key, base, model = get_llm_config()
 
-    # Optional per-field overrides for the un-saved case.
     if isinstance(body.get("api_key"), str) and body["api_key"].strip():
         api_key = body["api_key"].strip()
     if isinstance(body.get("api_base"), str) and body["api_base"].strip():
@@ -3791,15 +3169,12 @@ async def test_settings(
         return {"ok": False, "model": model, "latency_ms": int((time.monotonic() - started) * 1000),
                 "error": "连接超时（15 秒内未响应），请检查 API Base 地址与网络。"}
     except httpx.RequestError as exc:
-        # ConnectError / network / DNS — don't echo the raw exception text (it can
-        # carry the host/url); a short type name is enough to differentiate.
         return {"ok": False, "model": model, "latency_ms": int((time.monotonic() - started) * 1000),
                 "error": f"网络连接失败（{type(exc).__name__}），请检查 API Base 地址与网络。"}
 
     latency_ms = int((time.monotonic() - started) * 1000)
 
     if res.status_code < 400:
-        # Some endpoints echo the served model name; fall back to the requested one.
         served = model
         try:
             data = res.json()
@@ -3813,15 +3188,47 @@ async def test_settings(
     if status in (401, 403):
         error = "鉴权失败（API Key 无效或无权限），请检查 Key 是否正确。"
     elif status in (400, 404):
-        # 404 = unknown route/model on most gateways; 400 often = bad model name.
         error = f"模型不存在或请求被拒绝（HTTP {status}），请检查模型名称与 API Base。"
     elif status == 429:
         error = "请求过于频繁或额度不足（HTTP 429），请稍后再试或检查账户额度。"
     else:
-        # Trim the upstream body to a short, key-free reason hint.
         reason = (res.text or "").strip().replace("\n", " ")[:120]
         error = f"请求失败（HTTP {status}）{('：' + reason) if reason else ''}"
     return {"ok": False, "model": model, "latency_ms": latency_ms, "error": error}
+
+
+@app.get("/api/users")
+def users(
+    role: str = "",
+    status: str = "",
+    q: str = "",
+    user: dict[str, Any] = Depends(current_user),
+) -> list[dict[str, Any]]:
+    filters: list[str] = []
+    args: list[Any] = []
+    if user["role"] == "member":
+        filters.append("id = ?")
+        args.append(user["id"])
+    elif user["role"] == "manager":
+        team_ids = user.get("managed_team_ids") or ([user["team_id"]] if user.get("team_id") else [])
+        if "*" not in team_ids:
+            placeholders = ",".join("?" for _ in team_ids) or "?"
+            filters.append(f"(id = ? or team_id in ({placeholders}))")
+            args.extend([user["id"], *(team_ids or ["__none__"])])
+        # "*" → 业务管理员，看全部用户，不加过滤
+    if role:
+        filters.append("role = ?")
+        args.append(role)
+    if status:
+        filters.append("status = ?")
+        args.append(status)
+    if q.strip():
+        like = f"%{q.strip()}%"
+        filters.append("(name like ? or username like ? or email like ? or mobile like ? or dept like ? or wecom_userid like ?)")
+        args.extend([like, like, like, like, like, like])
+    where = f"where {' and '.join(filters)}" if filters else ""
+    with db() as conn:
+        return [normalize_user(row) for row in rowsdict(conn.execute(f"select * from users {where} order by dept, name", args).fetchall())]
 
 
 SEED_ADMIN_USERNAME = "administrator"
@@ -3873,13 +3280,477 @@ def _guard_admin_change(
             raise HTTPException(status_code=409, detail="至少要保留一个启用的管理员")
 
 
+@app.patch("/api/users/{user_id}")
+def patch_user(user_id: str, payload: dict[str, Any], user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+    require_admin(user)
+    allowed = {"username", "name", "email", "mobile", "dept", "role", "team_id", "managed_team_ids", "status"}
+    updates: dict[str, Any] = {key: payload[key] for key in allowed if key in payload}
+    if not updates:
+        raise HTTPException(status_code=400, detail="no supported user fields")
+    if "role" in updates and updates["role"] not in {"member", "manager", "admin"}:
+        raise HTTPException(status_code=400, detail="invalid role")
+    if "status" in updates and updates["status"] not in {"active", "disabled"}:
+        raise HTTPException(status_code=400, detail="invalid status")
+    if "managed_team_ids" in updates:
+        if not isinstance(updates["managed_team_ids"], list):
+            raise HTTPException(status_code=400, detail="managed_team_ids must be a list")
+        updates["managed_team_ids"] = json.dumps(updates["managed_team_ids"], ensure_ascii=False)
+    with db() as conn:
+        current = rowdict(conn.execute("select * from users where id = ?", (user_id,)).fetchone())
+        if not current:
+            raise HTTPException(status_code=404, detail="user not found")
+        _guard_admin_change(conn, user, current, updates.get("role"), updates.get("status"))
+        assignments = ", ".join(f"{key} = ?" for key in updates)
+        conn.execute(f"update users set {assignments} where id = ?", (*updates.values(), user_id))
+        audit(conn, user, "user.update", f"{user['name']} 修改用户 {current['name']}。")
+        changed = rowdict(conn.execute("select * from users where id = ?", (user_id,)).fetchone())
+    return normalize_user(changed)
+
+
+@app.post("/api/users/{user_id}/reset-password")
+def reset_user_password(user_id: str, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+    require_admin(user)
+    with db() as conn:
+        current = rowdict(conn.execute("select * from users where id = ?", (user_id,)).fetchone())
+        if not current:
+            raise HTTPException(status_code=404, detail="user not found")
+        conn.execute(
+            "update users set password_hash = ?, must_change_password = 1, failed_login_count = 0, locked_until = null, updated_at = ? where id = ?",
+            (hash_password(initial_password()), now(), user_id),
+        )
+        conn.execute("delete from sessions where user_id = ?", (user_id,))
+        audit(conn, user, "user.password", f"{user['name']} 重置用户 {current['name']} 的密码。")
+        changed = rowdict(conn.execute("select * from users where id = ?", (user_id,)).fetchone())
+    return normalize_user(changed)
+
+
+@app.get("/api/teams")
+def teams(_: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:
+    with db() as conn:
+        return [team_payload(conn, row) for row in rowsdict(conn.execute("select * from teams order by dept, name").fetchall())]
+
+
+@app.patch("/api/teams/{team_id}")
+def patch_team(team_id: str, payload: dict[str, Any], user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+    require_admin(user)
+    allowed = {"name", "dept", "manager_ids"}
+    updates: dict[str, Any] = {key: payload[key] for key in allowed if key in payload}
+    if not updates:
+        raise HTTPException(status_code=400, detail="no supported team fields")
+    if "manager_ids" in updates:
+        if not isinstance(updates["manager_ids"], list):
+            raise HTTPException(status_code=400, detail="manager_ids must be a list")
+        updates["manager_ids"] = json.dumps(updates["manager_ids"], ensure_ascii=False)
+    with db() as conn:
+        current = rowdict(conn.execute("select * from teams where id = ?", (team_id,)).fetchone())
+        if not current:
+            raise HTTPException(status_code=404, detail="team not found")
+        assignments = ", ".join(f"{key} = ?" for key in updates)
+        conn.execute(f"update teams set {assignments} where id = ?", (*updates.values(), team_id))
+        audit(conn, user, "team.update", f"{user['name']} 修改团队 {current['name']}。")
+        changed = rowdict(conn.execute("select * from teams where id = ?", (team_id,)).fetchone())
+        return team_payload(conn, changed)
+
+
+def wecom_config(conn: sqlite3.Connection, include_secret: bool = False) -> dict[str, Any]:
+    secret = get_setting(conn, "wecom_secret")
+    payload = {
+        "corp_id": get_setting(conn, "wecom_corp_id"),
+        "sales_department_id": get_setting(conn, "wecom_sales_department_id"),
+        "secret_configured": bool(secret),
+    }
+    if include_secret:
+        payload["secret"] = secret
+    return payload
+
+
+def wecom_api_get(client: httpx.Client, path: str, params: dict[str, Any]) -> dict[str, Any]:
+    # All failures here are raised as HTTPException, never a bare exception:
+    # an unhandled error bubbles to a 500 emitted OUTSIDE the CORS middleware,
+    # so it has no CORS headers and the browser surfaces a useless "Network
+    # Error" instead of WeCom's real message (e.g. "invalid corpid").
+    try:
+        res = client.get(f"https://qyapi.weixin.qq.com{path}", params=params)
+        res.raise_for_status()
+        data = res.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        raise HTTPException(status_code=502, detail=f"企业微信接口 {path} 请求失败：{exc}") from exc
+    if data.get("errcode") not in (0, None):
+        raise HTTPException(
+            status_code=502,
+            detail=f"企业微信接口 {path} 返回错误 {data.get('errcode')}：{data.get('errmsg') or ''}".strip(),
+        )
+    return data
+
+
+def fetch_wecom_sales(config: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]:
+    corp_id = config.get("corp_id", "").strip()
+    secret = config.get("secret", "").strip()
+    sales_department_id = str(config.get("sales_department_id", "")).strip()
+    if not corp_id or not secret or not sales_department_id:
+        raise HTTPException(status_code=400, detail="企业微信 CorpID、Secret、销售部门 ID 必须先配置")
+    with httpx.Client(timeout=30) as client:
+        token_data = wecom_api_get(client, "/cgi-bin/gettoken", {"corpid": corp_id, "corpsecret": secret})
+        access_token = token_data["access_token"]
+        departments: dict[str, dict[str, Any]] = {}
+        try:
+            dept_data = wecom_api_get(
+                client,
+                "/cgi-bin/department/list",
+                {"access_token": access_token, "id": sales_department_id},
+            )
+            for item in dept_data.get("department", []):
+                departments[str(item.get("id"))] = item
+        except Exception:
+            departments[sales_department_id] = {"id": sales_department_id, "name": f"企微部门 {sales_department_id}", "parentid": ""}
+        user_data = wecom_api_get(
+            client,
+            "/cgi-bin/user/list",
+            {"access_token": access_token, "department_id": sales_department_id, "fetch_child": 1},
+        )
+    members: list[dict[str, Any]] = []
+    for item in user_data.get("userlist", []):
+        userid = str(item.get("userid") or "").strip()
+        if not userid:
+            continue
+        department_ids = [str(dept) for dept in item.get("department", [])]
+        primary_department_id = department_ids[0] if department_ids else sales_department_id
+        departments.setdefault(
+            primary_department_id,
+            {"id": primary_department_id, "name": f"企微部门 {primary_department_id}", "parentid": sales_department_id},
+        )
+        members.append(
+            {
+                "userid": userid,
+                "name": clean_wecom_name(item.get("name") or userid) or userid,
+                "email": item.get("email") or item.get("biz_mail") or "",
+                "mobile": item.get("mobile") or "",
+                "department_ids": department_ids or [sales_department_id],
+                "primary_department_id": primary_department_id,
+                "status": item.get("status", 1),
+            }
+        )
+    return members, departments
+
+
+def mapping_matches(mapping: dict[str, Any], member: dict[str, Any], username: str, team_id: str) -> bool:
+    value = str(mapping.get("match_value") or "").strip()
+    match_type = mapping.get("match_type")
+    if not value:
+        return False
+    if match_type == "wecom_userid":
+        return member.get("userid") == value
+    if match_type == "name":
+        return member.get("name") == value
+    if match_type == "mobile":
+        return member.get("mobile") == value
+    if match_type == "department_id":
+        return value in (member.get("department_ids") or [])
+    if match_type == "local_username":
+        return username == value
+    if match_type == "team_id":
+        return team_id == value
+    return False
+
+
+def role_for_wecom_member(
+    member: dict[str, Any],
+    team_id: str,
+    all_team_ids: list[str],
+    mappings: list[dict[str, Any]],
+) -> tuple[str, list[str]]:
+    username = member["userid"]
+    for mapping in mappings:
+        if not mapping.get("active") or not mapping_matches(mapping, member, username, team_id):
+            continue
+        role = mapping.get("role") if mapping.get("role") in {"admin", "manager", "member"} else "member"
+        managed_team_ids = mapping.get("managed_team_ids") or []
+        if role == "manager" and not managed_team_ids:
+            managed_team_ids = all_team_ids
+        if role != "manager":
+            managed_team_ids = []
+        return role, managed_team_ids
+    return "member", []
+
+
+def sync_wecom_users(conn: sqlite3.Connection, actor: dict[str, Any], preview: bool = False) -> dict[str, Any]:
+    members, departments = fetch_wecom_sales(wecom_config(conn, include_secret=True))
+    timestamp = now()
+    team_ids: list[str] = []
+    for dept_id, dept in departments.items():
+        team_id = f"wecom-{dept_id}"
+        team_ids.append(team_id)
+        if preview:
+            continue
+        conn.execute(
+            """
+            insert into teams(id,name,dept,wecom_department_id,parent_wecom_department_id,manager_ids)
+            values(?,?,?,?,?,?)
+            on conflict(id) do update set
+                name = excluded.name,
+                dept = excluded.dept,
+                wecom_department_id = excluded.wecom_department_id,
+                parent_wecom_department_id = excluded.parent_wecom_department_id
+            """,
+            (
+                team_id,
+                str(dept.get("name") or f"企微部门 {dept_id}"),
+                "销售部",
+                str(dept_id),
+                str(dept.get("parentid") or ""),
+                "[]",
+            ),
+        )
+    mappings = [
+        normalize_mapping(row)
+        for row in rowsdict(
+            conn.execute("select * from role_mappings where active = 1 order by priority asc, created_at asc").fetchall()
+        )
+    ]
+    existing_by_wecom = {
+        row["wecom_userid"]: row
+        for row in rowsdict(conn.execute("select * from users where wecom_userid is not null and wecom_userid != ''").fetchall())
+    }
+    existing_by_username = {
+        row["username"]: row
+        for row in rowsdict(conn.execute("select * from users where username is not null and username != ''").fetchall())
+    }
+    added: list[str] = []
+    updated: list[str] = []
+    disabled: list[str] = []
+    synced_userids = {member["userid"] for member in members}
+    for member in members:
+        team_id = f"wecom-{member['primary_department_id']}"
+        role, managed_team_ids = role_for_wecom_member(member, team_id, team_ids, mappings)
+        current = existing_by_wecom.get(member["userid"]) or existing_by_username.get(member["userid"])
+        if preview:
+            (updated if current else added).append(member["name"])
+            continue
+        if current:
+            conn.execute(
+                """
+                update users
+                set username = ?, name = ?, email = ?, mobile = ?, dept = ?, role = ?, team_id = ?,
+                    managed_team_ids = ?, status = ?, source = 'wecom', wecom_userid = ?, updated_at = ?
+                where id = ?
+                """,
+                (
+                    member["userid"],
+                    member["name"],
+                    member["email"],
+                    member["mobile"],
+                    departments.get(member["primary_department_id"], {}).get("name") or "销售部",
+                    role,
+                    team_id,
+                    json.dumps(managed_team_ids, ensure_ascii=False),
+                    "active",
+                    member["userid"],
+                    timestamp,
+                    current["id"],
+                ),
+            )
+            updated.append(member["name"])
+        else:
+            user_id = f"wecom:{member['userid']}"
+            conn.execute(
+                """
+                insert into users(
+                    id,username,name,email,mobile,dept,role,team_id,managed_team_ids,status,source,wecom_userid,
+                    password_hash,must_change_password,failed_login_count,last_active_at,last_login_at,created_at,updated_at
+                )
+                values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    user_id,
+                    member["userid"],
+                    member["name"],
+                    member["email"],
+                    member["mobile"],
+                    departments.get(member["primary_department_id"], {}).get("name") or "销售部",
+                    role,
+                    team_id,
+                    json.dumps(managed_team_ids, ensure_ascii=False),
+                    "active",
+                    "wecom",
+                    member["userid"],
+                    hash_password(initial_password()),
+                    1,
+                    0,
+                    timestamp,
+                    None,
+                    timestamp,
+                    timestamp,
+                ),
+            )
+            added.append(member["name"])
+    stale_rows = rowsdict(
+        conn.execute(
+            "select * from users where source = 'wecom' and status = 'active' and wecom_userid is not null and wecom_userid != ''"
+        ).fetchall()
+    )
+    for row in stale_rows:
+        if row["wecom_userid"] in synced_userids:
+            continue
+        disabled.append(row["name"])
+        if not preview:
+            conn.execute(
+                "update users set status = 'disabled', updated_at = ? where id = ?",
+                (timestamp, row["id"]),
+            )
+            conn.execute("delete from sessions where user_id = ?", (row["id"],))
+    if not preview:
+        for team_id in team_ids:
+            managers = [
+                row["id"]
+                for row in rowsdict(
+                    conn.execute(
+                        "select id, managed_team_ids from users where role = 'manager' and status = 'active'"
+                    ).fetchall()
+                )
+                if team_id in safe_json(row.get("managed_team_ids"), [])
+            ]
+            conn.execute("update teams set manager_ids = ? where id = ?", (json.dumps(managers, ensure_ascii=False), team_id))
+        audit(conn, actor, "wecom.sync", f"同步企业微信销售团队：新增 {len(added)}，更新 {len(updated)}，禁用 {len(disabled)}。")
+    return {
+        "preview": preview,
+        "added": added,
+        "updated": updated,
+        "disabled": disabled,
+        "added_count": len(added),
+        "updated_count": len(updated),
+        "disabled_count": len(disabled),
+        "team_count": len(team_ids),
+        "initial_password": initial_password() if not preview else None,
+    }
+
+
+@app.get("/api/wecom/config")
+def get_wecom_config(user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+    require_admin(user)
+    with db() as conn:
+        return wecom_config(conn)
+
+
+@app.patch("/api/wecom/config")
+def patch_wecom_config(payload: dict[str, Any], user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+    require_admin(user)
+    with db() as conn:
+        if "corp_id" in payload:
+            set_setting(conn, "wecom_corp_id", str(payload.get("corp_id") or "").strip())
+        if "secret" in payload and str(payload.get("secret") or "").strip():
+            set_setting(conn, "wecom_secret", str(payload.get("secret") or "").strip())
+        if "sales_department_id" in payload:
+            set_setting(conn, "wecom_sales_department_id", str(payload.get("sales_department_id") or "").strip())
+        audit(conn, user, "wecom.config", f"{user['name']} 修改企业微信同步配置。")
+        return wecom_config(conn)
+
+
+@app.get("/api/wecom/role-mappings")
+def get_role_mappings(user: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:
+    require_admin(user)
+    with db() as conn:
+        return [
+            normalize_mapping(row)
+            for row in rowsdict(conn.execute("select * from role_mappings order by priority asc, created_at asc").fetchall())
+        ]
+
+
+@app.post("/api/wecom/role-mappings")
+def create_role_mapping(payload: dict[str, Any], user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+    require_admin(user)
+    match_type = str(payload.get("match_type") or "").strip()
+    match_value = str(payload.get("match_value") or "").strip()
+    role = str(payload.get("role") or "member").strip()
+    if match_type not in {"wecom_userid", "name", "mobile", "department_id", "team_id", "local_username"}:
+        raise HTTPException(status_code=400, detail="invalid match type")
+    if role not in {"admin", "manager", "member"}:
+        raise HTTPException(status_code=400, detail="invalid role")
+    if not match_value:
+        raise HTTPException(status_code=400, detail="match value is required")
+    mapping_id = str(uuid.uuid4())
+    timestamp = now()
+    managed_team_ids = payload.get("managed_team_ids") or []
+    if not isinstance(managed_team_ids, list):
+        raise HTTPException(status_code=400, detail="managed_team_ids must be a list")
+    with db() as conn:
+        conn.execute(
+            """
+            insert into role_mappings(id,match_type,match_value,role,managed_team_ids,active,priority,created_at,updated_at)
+            values(?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                mapping_id,
+                match_type,
+                match_value,
+                role,
+                json.dumps(managed_team_ids, ensure_ascii=False),
+                1 if payload.get("active", True) else 0,
+                int(payload.get("priority") or 100),
+                timestamp,
+                timestamp,
+            ),
+        )
+        audit(conn, user, "wecom.role", f"{user['name']} 新增角色映射：{match_type}={match_value} -> {role}。")
+        row = rowdict(conn.execute("select * from role_mappings where id = ?", (mapping_id,)).fetchone())
+    return normalize_mapping(row)
+
+
+@app.patch("/api/wecom/role-mappings/{mapping_id}")
+def patch_role_mapping(mapping_id: str, payload: dict[str, Any], user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+    require_admin(user)
+    allowed = {"match_type", "match_value", "role", "managed_team_ids", "active", "priority"}
+    updates = {key: payload[key] for key in allowed if key in payload}
+    if not updates:
+        raise HTTPException(status_code=400, detail="no supported mapping fields")
+    if "match_type" in updates and updates["match_type"] not in {"wecom_userid", "name", "mobile", "department_id", "team_id", "local_username"}:
+        raise HTTPException(status_code=400, detail="invalid match type")
+    if "role" in updates and updates["role"] not in {"admin", "manager", "member"}:
+        raise HTTPException(status_code=400, detail="invalid role")
+    if "managed_team_ids" in updates:
+        if not isinstance(updates["managed_team_ids"], list):
+            raise HTTPException(status_code=400, detail="managed_team_ids must be a list")
+        updates["managed_team_ids"] = json.dumps(updates["managed_team_ids"], ensure_ascii=False)
+    if "active" in updates:
+        updates["active"] = 1 if updates["active"] else 0
+    updates["updated_at"] = now()
+    with db() as conn:
+        current = rowdict(conn.execute("select * from role_mappings where id = ?", (mapping_id,)).fetchone())
+        if not current:
+            raise HTTPException(status_code=404, detail="role mapping not found")
+        assignments = ", ".join(f"{key} = ?" for key in updates)
+        conn.execute(f"update role_mappings set {assignments} where id = ?", (*updates.values(), mapping_id))
+        audit(conn, user, "wecom.role", f"{user['name']} 修改角色映射：{current['match_value']}。")
+        changed = rowdict(conn.execute("select * from role_mappings where id = ?", (mapping_id,)).fetchone())
+    return normalize_mapping(changed)
+
+
+@app.delete("/api/wecom/role-mappings/{mapping_id}")
+def delete_role_mapping(mapping_id: str, user: dict[str, Any] = Depends(current_user)) -> dict[str, bool]:
+    require_admin(user)
+    with db() as conn:
+        current = rowdict(conn.execute("select * from role_mappings where id = ?", (mapping_id,)).fetchone())
+        if not current:
+            raise HTTPException(status_code=404, detail="role mapping not found")
+        conn.execute("delete from role_mappings where id = ?", (mapping_id,))
+        audit(conn, user, "wecom.role", f"{user['name']} 删除角色映射：{current['match_value']}。")
+    return {"ok": True}
+
+
+@app.post("/api/wecom/sync")
+def sync_wecom(payload: dict[str, Any] | None = None, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+    require_admin(user)
+    with db() as conn:
+        return sync_wecom_users(conn, user, preview=bool((payload or {}).get("preview")))
+
+
 @app.get("/api/recordings")
 def recordings(
     scope: str = "mine",
     q: str = "",
+    meeting_type: str = "",
     user: dict[str, Any] = Depends(current_user),
 ) -> list[dict[str, Any]]:
-    where, args = recording_filter_where(user, scope, q)
+    where, args = recording_filter_where(user, scope, q, meeting_type)
     with db() as conn:
         rows = conn.execute(
             f"""
@@ -3898,16 +3769,30 @@ def upload_recording(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     title: str = Form(...),
+    meeting_type: str = Form("内部会议"),
     tag: str = Form(""),
-    briefing: str = Form(""),
+    auto_process: bool = Form(True),
+    expected_speakers: int | None = Form(None),
     user: dict[str, Any] = Depends(current_user),
 ) -> dict[str, Any]:
+    return create_recording(
+        background_tasks, file, title, meeting_type, tag, auto_process,
+        expected_speakers, user,
+    )
+
+
+def create_recording(
+    background_tasks: BackgroundTasks, file: UploadFile, title: str,
+    meeting_type: str, tag: str, auto_process: bool,
+    expected_speakers: int | None, user: dict[str, Any],
+) -> dict[str, Any]:
+    """Shared recording business service. Caller must authenticate its principal."""
     if user["role"] == "admin":
         raise HTTPException(status_code=403, detail="admin cannot upload recordings")
     rec_id = str(uuid.uuid4())
     ext = Path(file.filename or "recording.mp3").suffix or ".mp3"
     target = RECORDINGS / f"{rec_id}{ext}"
-    max_mb = env_int("AHAMVOICE_UPLOAD_MAX_MB", 2048, 16, 16384)
+    max_mb = env_int("NEWVOICE_UPLOAD_MAX_MB", 2048, 16, 16384)
     max_bytes = max_mb * 1024 * 1024
     chunk_size = 1024 * 1024  # 1 MB
     written = 0
@@ -3923,7 +3808,7 @@ def upload_recording(
                     target.unlink(missing_ok=True)
                     raise HTTPException(
                         status_code=413,
-                        detail=f"upload exceeds {max_mb} MB limit (AHAMVOICE_UPLOAD_MAX_MB)",
+                        detail=f"upload exceeds {max_mb} MB limit (NEWVOICE_UPLOAD_MAX_MB)",
                     )
                 out.write(chunk)
     except HTTPException:
@@ -3934,129 +3819,41 @@ def upload_recording(
     if written == 0:
         target.unlink(missing_ok=True)
         raise HTTPException(status_code=400, detail="uploaded file is empty")
-    duration = probe_duration(target)
-    with db() as conn:
-        conn.execute(
-            """
-            insert into recordings(id,title,filename,file_path,tag,owner_id,team_id,duration,duration_label,asr_status,summary_status,created_at,updated_at)
-            values(?,?,?,?,?,?,?,?,?,?,?,?,?)
-            """,
-            (
-                rec_id,
-                title.strip() or Path(file.filename or "录音").stem,
-                file.filename or target.name,
-                str(target),
-                tag,
-                user["id"],
-                user.get("team_id"),
-                duration,
-                seconds_label(duration),
-                "queued",
-                "pending",
-                now(),
-                now(),
-            ),
-        )
-        audit(conn, user, "recording", f"上传录音：{title.strip() or file.filename}。")
-        rec = rowdict(conn.execute("select * from recordings where id = ?", (rec_id,)).fetchone())
-        payload = recording_payload(conn, rec)
-    if briefing.strip():
-        store_recording_context(rec_id, briefing, None, user)
-    background_tasks.add_task(process_recording_background, rec_id, dict(user))
-    return payload
-
-
-AUDIO_IMPORT_SUFFIXES = {
-    ".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".opus", ".wma", ".amr",
-    ".mp4", ".m4v", ".mov", ".mkv", ".webm",
-}
-
-
-@app.post("/api/recordings/import")
-def import_recording(
-    payload: dict[str, Any] = Body(...),
-    user: dict[str, Any] = Depends(current_user),
-) -> dict[str, Any]:
-    """Register a recording that already sits on this machine, by path.
-
-    The browser upload path exists for humans dragging a file in; an assistant
-    driving the app over MCP already has the file locally, so copying its bytes
-    through a multipart request would be pure waste.
-
-    `briefing` and `terms` can be attached in the same call, so one round trip
-    covers "here is the file, here is what the meeting is about" and processing
-    starts with that context already in place.
-    """
-    raw_path = str(payload.get("path") or "").strip()
-    if not raw_path:
-        raise HTTPException(status_code=400, detail="path is required")
-    source = Path(raw_path).expanduser()
-    if not source.is_absolute():
-        raise HTTPException(status_code=400, detail="path must be absolute")
-    if not source.is_file():
-        raise HTTPException(status_code=404, detail=f"no such file: {source}")
-    suffix = source.suffix.lower()
-    if suffix not in AUDIO_IMPORT_SUFFIXES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"unsupported file type {suffix or '(none)'}; expected one of "
-            + ", ".join(sorted(AUDIO_IMPORT_SUFFIXES)),
-        )
-    max_mb = env_int("AHAMVOICE_UPLOAD_MAX_MB", 2048, 16, 16384)
-    size = source.stat().st_size
-    if size == 0:
-        raise HTTPException(status_code=400, detail="file is empty")
-    if size > max_mb * 1024 * 1024:
-        raise HTTPException(status_code=413, detail=f"file exceeds {max_mb} MB limit")
-
-    rec_id = str(uuid.uuid4())
-    target = RECORDINGS / f"{rec_id}{suffix}"
-    # Copy, never move: the file belongs to the user, not to us.
-    shutil.copyfile(source, target)
     try:
         duration = probe_duration(target)
+        with db() as conn:
+            conn.execute(
+                """
+                insert into recordings(id,title,filename,file_path,meeting_type,tag,owner_id,team_id,duration,duration_label,asr_status,summary_status,expected_speakers,created_at,updated_at)
+                values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    rec_id,
+                    title.strip() or Path(file.filename or "录音").stem,
+                    file.filename or target.name,
+                    str(target),
+                    meeting_type,
+                    tag,
+                    user["id"],
+                    user.get("team_id"),
+                    duration,
+                    seconds_label(duration),
+                    "queued" if auto_process else "pending",
+                    "pending",
+                    (expected_speakers if (expected_speakers and 2 <= expected_speakers <= 50) else None),
+                    now(),
+                    now(),
+                ),
+            )
+            audit(conn, user, "recording", f"上传录音：{title.strip() or file.filename}。")
+            rec = rowdict(conn.execute("select * from recordings where id = ?", (rec_id,)).fetchone())
+            payload = recording_payload(conn, rec)
+            if auto_process:
+                voice_integration.enqueue(rec_id, user['id'], connection=conn)
     except Exception:
         target.unlink(missing_ok=True)
         raise
-    title = str(payload.get("title") or "").strip() or source.stem
-    briefing = str(payload.get("briefing") or "").strip()
-    raw_terms = payload.get("terms") or []
-    with db() as conn:
-        conn.execute(
-            """
-            insert into recordings(id,title,filename,file_path,tag,owner_id,team_id,duration,duration_label,asr_status,summary_status,created_at,updated_at)
-            values(?,?,?,?,?,?,?,?,?,?,?,?,?)
-            """,
-            (
-                rec_id,
-                title,
-                source.name,
-                str(target),
-                str(payload.get("tag") or ""),
-                user["id"],
-                user.get("team_id"),
-                duration,
-                seconds_label(duration),
-                "queued",
-                "pending",
-                now(),
-                now(),
-            ),
-        )
-        audit(conn, user, "recording", f"导入本机录音：{title}（{source}）。")
-    rejected: list[dict[str, str]] = []
-    if briefing or raw_terms:
-        stored = store_recording_context(rec_id, briefing, raw_terms, user, replace=True)
-        rejected = stored["rejected"]
-    with db() as conn:
-        rec = rowdict(conn.execute("select * from recordings where id = ?", (rec_id,)).fetchone())
-        result = recording_payload(conn, rec)
-    threading.Thread(
-        target=process_recording_background, args=(rec_id, dict(user)), daemon=True
-    ).start()
-    if rejected:
-        result["rejected_terms"] = rejected
-    return result
+    return payload
 
 
 @app.post("/api/recordings/{recording_id}/process")
@@ -4069,140 +3866,9 @@ def process_api(
         rec = can_access_recording(conn, recording_id, user)
         if rec["asr_status"] == "running" or rec["summary_status"] == "running":
             raise HTTPException(status_code=409, detail="recording is already processing")
-        conn.execute(
-            "update recordings set asr_status = ?, summary_status = ?, updated_at = ? where id = ?",
-            ("queued", "pending", now(), recording_id),
-        )
         audit(conn, user, "recording.process", f"{user['name']} 启动完整处理：{rec['title']}。")
-    background_tasks.add_task(process_recording_background, recording_id, dict(user))
+    voice_integration.enqueue(recording_id, user['id'], reset=True)
     return {"recording_id": recording_id, "status": "queued"}
-
-
-@app.get("/api/recordings/{recording_id}/context")
-def get_recording_context(recording_id: str, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
-    with db() as conn:
-        can_access_recording(conn, recording_id, user)
-        return recording_context_payload(conn, recording_id)
-
-
-def store_recording_context(
-    recording_id: str,
-    briefing: str | None,
-    raw_terms: Any,
-    user: dict[str, Any],
-    replace: bool = True,
-) -> dict[str, Any]:
-    """Write a meeting's background and its proper nouns.
-
-    Shared by the import call and the standalone context endpoint so an
-    assistant can do it in one round trip or fix it up afterwards.
-
-    Terms seaco cannot use come back with a reason rather than being silently
-    dropped, so the caller can rephrase — an assistant that is told
-    「公司全称口语里没人说」 will send the short form instead.
-    """
-    ts = now()
-    accepted: list[dict[str, Any]] = []
-    rejected: list[dict[str, str]] = []
-    with db() as conn:
-        if briefing is not None:
-            conn.execute(
-                """
-                insert into recording_contexts(recording_id, briefing, created_at, updated_at)
-                values(?,?,?,?)
-                on conflict(recording_id) do update set briefing = excluded.briefing, updated_at = excluded.updated_at
-                """,
-                (recording_id, briefing.strip(), ts, ts),
-            )
-        if raw_terms is not None:
-            if not isinstance(raw_terms, list):
-                raise HTTPException(status_code=400, detail="terms must be a list")
-            if replace:
-                conn.execute("delete from recording_hotwords where recording_id = ?", (recording_id,))
-            existing = {
-                str(row["term"]).lower()
-                for row in conn.execute(
-                    "select term from recording_hotwords where recording_id = ?", (recording_id,)
-                ).fetchall()
-            }
-            for raw in raw_terms:
-                if isinstance(raw, str):
-                    raw = {"term": raw}
-                if not isinstance(raw, dict):
-                    rejected.append({"term": str(raw), "reason": "格式不对，应为字符串或 {term, aliases, note}"})
-                    continue
-                term = str(raw.get("term") or "").strip()
-                reason = asr_hotword_rejection(term)
-                if reason:
-                    rejected.append({"term": term, "reason": reason})
-                    continue
-                if term.lower() in existing:
-                    continue
-                raw_aliases = raw.get("aliases") or []
-                if isinstance(raw_aliases, str):
-                    raw_aliases = raw_aliases.split(",")
-                aliases = []
-                for alias in raw_aliases:
-                    alias = str(alias).strip()
-                    # 别名是"可能被听错的写法"，不喂 ASR，只做转写后替换，所以约束比 term 松。
-                    if alias and alias.lower() != term.lower() and "," not in alias:
-                        aliases.append(alias)
-                conn.execute(
-                    """
-                    insert into recording_hotwords(id, recording_id, term, aliases, note, source, hit_count, created_at)
-                    values(?,?,?,?,?,?,0,?)
-                    """,
-                    (
-                        str(uuid.uuid4()),
-                        recording_id,
-                        term,
-                        ",".join(aliases),
-                        str(raw.get("note") or "").strip(),
-                        str(raw.get("source") or "mcp").strip() or "mcp",
-                        ts,
-                    ),
-                )
-                existing.add(term.lower())
-                accepted.append({"term": term, "aliases": aliases})
-        audit(
-            conn,
-            user,
-            "recording.context",
-            f"更新会前说明：接受 {len(accepted)} 条术语，拒绝 {len(rejected)} 条。",
-        )
-        result = recording_context_payload(conn, recording_id)
-    result["accepted"] = accepted
-    result["rejected"] = rejected
-    return result
-
-
-@app.put("/api/recordings/{recording_id}/context")
-def put_recording_context(
-    recording_id: str,
-    payload: dict[str, Any] = Body(...),
-    user: dict[str, Any] = Depends(current_user),
-) -> dict[str, Any]:
-    """Attach or update a recording's background and proper nouns.
-
-    The background is free text the user dictated to an assistant ("这次去客户
-    现场，对方王总和李主任在场，聊 ERP 和 MOM 是否同步建设"). It reaches the summary
-    prompt verbatim — it says who is who and what the meeting is for, which is
-    the context a transcript alone never carries, and it is more trustworthy
-    than the transcript because the user wrote it.
-    """
-    with db() as conn:
-        rec = can_access_recording(conn, recording_id, user)
-    result = store_recording_context(
-        recording_id,
-        payload.get("briefing") if "briefing" in payload else None,
-        payload.get("terms") if "terms" in payload else None,
-        user,
-        replace=bool(payload.get("replace", True)),
-    )
-    # 术语只在下一次转写时生效；说明对纪要立即生效。
-    result["applies_on_next_run"] = True
-    result["asr_status"] = rec["asr_status"]
-    return result
 
 
 @app.get("/api/recordings/{recording_id}")
@@ -4292,36 +3958,37 @@ def recording_detail(recording_id: str, user: dict[str, Any] = Depends(current_u
         return {
             "recording": rec_payload,
             "segments": segments,
-            "summary": summary,
-            "summaries": summaries,
+            "summary": summary_payload(rec, summary),
+            "summaries": [summary_payload(rec, item) for item in summaries],
             "emotion_analysis": emotion,
             "tasks": tasks,
             "outputs": outputs,
             "hotword_package": hotword_package,
+            # Compatibility for browser tabs that loaded the pre-removal
+            # frontend bundle. That bundle dereferences crm_sync.synced_at
+            # while rendering a recording detail page. Keep this inert,
+            # read-only shape until those tabs have naturally refreshed; no
+            # CRM configuration, search, sync, or write route is restored.
+            "crm_sync": {
+                "status": "not_configured",
+                "error": None,
+                "synced_at": None,
+                "recording_id": None,
+                "minute_id": None,
+                "recording_url": None,
+                "minute_url": None,
+                "emotion_id": None,
+                "emotion_url": None,
+                "relation_status": None,
+                "relation_source": None,
+                "relation_confidence": None,
+                "relation_target_type": None,
+                "relation_target_id": None,
+                "relation_target_name": None,
+                "selected": None,
+                "candidates": [],
+            },
         }
-
-
-@app.delete("/api/recordings/{recording_id}")
-def delete_recording(recording_id: str, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
-    with db() as conn:
-        rec = can_access_recording(conn, recording_id, user)
-        file_path = rec.get("file_path")
-        # 先拿磁盘路径，再在同一事务里级联删除所有关联记录。
-        conn.execute("delete from transcript_segments where recording_id = ?", (recording_id,))
-        conn.execute("delete from summaries where recording_id = ?", (recording_id,))
-        conn.execute("delete from emotion_analyses where recording_id = ?", (recording_id,))
-        conn.execute("delete from tasks where recording_id = ?", (recording_id,))
-        conn.execute("delete from recording_hotword_packages where recording_id = ?", (recording_id,))
-        conn.execute("delete from recordings where id = ?", (recording_id,))
-        audit(conn, user, "recording", f"删除录音：{rec['title']}。")
-    # 磁盘清理放在 DB 事务提交之后；任何失败都不应让请求 500，录音记录删除才是主目标。
-    if file_path:
-        try:
-            Path(file_path).unlink(missing_ok=True)
-        except OSError:
-            # 磁盘文件删除失败不影响主结果（DB 记录已删除）。
-            pass
-    return {"ok": True, "deleted_id": recording_id}
 
 
 @app.get("/api/recordings/{recording_id}/audio")
@@ -4332,25 +3999,31 @@ def recording_audio(recording_id: str, user: dict[str, Any] = Depends(current_us
 
 
 @app.post("/api/recordings/{recording_id}/transcribe")
-def transcribe_api(
-    recording_id: str,
-    background_tasks: BackgroundTasks,
-    user: dict[str, Any] = Depends(current_user),
-) -> dict[str, Any]:
-    result = transcribe_recording(recording_id, user)
-    # 新稿子要配新的情绪数据，否则纪要会拿着上一版的声学依据。
-    background_tasks.add_task(run_emotion_job, recording_id, dict(user))
-    return result
+def transcribe_api(recording_id: str, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+    job_id=voice_integration.enqueue(recording_id,user['id'],'transcribe_only')
+    return {'recording_id':recording_id,'job_id':job_id,'status':'queued'}
 
 
 @app.post("/api/recordings/{recording_id}/summarize")
 async def summarize_api(recording_id: str, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
-    return await summarize_recording(recording_id, user)
+    job_id=voice_integration.enqueue(recording_id,user['id'],'summary_only')
+    return {'recording_id':recording_id,'job_id':job_id,'status':'queued'}
 
 
 @app.post("/api/recordings/{recording_id}/summary/revise")
 async def revise_summary_api(recording_id: str, payload: dict[str, str], user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+    # Compatibility for older clients. The Aham UI uses preview/apply below.
     return await revise_summary(recording_id, payload.get("instruction") or "", user)
+
+
+@app.post("/api/recordings/{recording_id}/summary/revise/preview")
+async def preview_revision_api(recording_id: str, payload: dict[str, str], user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+    return await preview_summary_revision(recording_id, payload.get("instruction") or "", user)
+
+
+@app.post("/api/recordings/{recording_id}/summary/revise/apply")
+def apply_revision_api(recording_id: str, payload: dict[str, str], user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+    return apply_summary_revision(recording_id, payload.get("draft_id") or "", user)
 
 
 @app.get("/api/recordings/{recording_id}/export/transcript.md")
@@ -4407,70 +4080,6 @@ def normalize_hotword(row: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
-def hotword_status_payload(conn: sqlite3.Connection) -> dict[str, Any]:
-    total = conn.execute("select count(*) from hotwords").fetchone()[0]
-    active = conn.execute("select count(*) from hotwords where active = 1 and coalesce(state, 'active') = 'active'").fetchone()[0]
-    protected = conn.execute("select count(*) from hotwords where active = 1 and protected = 1").fetchone()[0]
-    expired = conn.execute("select count(*) from hotwords where coalesce(state, 'active') = 'expired' or active = 0").fetchone()[0]
-    dynamic = max(0, active - protected)
-    by_source = rowsdict(
-        conn.execute(
-            """
-            select source, count(*) as total, sum(case when active = 1 then 1 else 0 end) as active,
-                   sum(case when protected = 1 then 1 else 0 end) as protected
-            from hotwords
-            group by source
-            order by active desc, total desc
-            """
-        ).fetchall()
-    )
-    sources = rowsdict(conn.execute("select * from hotword_sources order by source_type, name").fetchall())
-    runs = rowsdict(conn.execute("select * from hotword_sync_runs order by started_at desc limit 8").fetchall())
-    return {
-        "total": total,
-        "active": active,
-        "protected": protected,
-        "dynamic": dynamic,
-        "expired": expired,
-        "limits": hotword_limits(),
-        "by_source": by_source,
-        "sources": sources,
-        "recent_runs": runs,
-    }
-
-
-def maintain_hotwords(conn: sqlite3.Connection, stale_days: int = 60, expire_days: int = 120) -> dict[str, int]:
-    stale_cutoff = datetime.now() - timedelta(days=stale_days)
-    expire_cutoff = datetime.now() - timedelta(days=expire_days)
-    expired = 0
-    rescored = 0
-    rows = rowsdict(conn.execute("select * from hotwords").fetchall())
-    for row in rows:
-        protected = int(row.get("protected") or 0)
-        state = str(row.get("state") or "active")
-        active = int(row.get("active") or 0)
-        last_seen = parse_time(row.get("last_seen_at"))
-        next_state = state
-        next_active = active
-        if protected:
-            next_state = "active"
-            next_active = 1
-        elif last_seen and last_seen < expire_cutoff:
-            next_state = "expired"
-            next_active = 0
-            expired += 1 if active else 0
-        elif last_seen and last_seen < stale_cutoff and state == "active":
-            next_state = "active"
-            next_active = 1
-        score = hotword_row_score({**row, "active": next_active, "state": next_state})
-        conn.execute(
-            "update hotwords set state = ?, active = ?, score = ?, updated_at = ? where id = ?",
-            (next_state, next_active, score, now(), row["id"]),
-        )
-        rescored += 1
-    return {"expired": expired, "rescored": rescored}
-
-
 @app.get("/api/hotwords")
 def hotwords(
     state: str = "",
@@ -4481,6 +4090,10 @@ def hotwords(
     with db() as conn:
         where = ["1=1"]
         args: list[Any] = []
+        # 普通成员只能看到非个人热词 + 自己的个人手填热词;manager/admin 看全库(供热词总览页)。
+        if user["role"] not in {"manager", "admin"}:
+            where.append("(coalesce(scope, '') != 'personal' or owner_id = ?)")
+            args.append(user["id"])
         if state:
             where.append("coalesce(state, 'active') = ?")
             args.append(state)
@@ -4503,31 +4116,123 @@ def hotwords(
         return [normalize_hotword(dict(row)) for row in rows]
 
 
+# ---------------------------------------------------------------------------
+# 个人手填热词 —— 对齐 aham-voice 开源版的「一个大文本框」体验。
+# 多用户语义：个人热词按 owner_id 作用域（每个用户独立一套），不触碰外部同步热词。
+# 同步进来的热词(其它 source)。前端富文本框用顿号「、」分隔,GET words 与 PUT
+# 的读写范围保持一致,保证无损 round-trip。
+# ---------------------------------------------------------------------------
+HOTWORD_WORD_PATTERN = re.compile(r"^[一-鿿A-Za-z0-9]+$")
+
+
 @app.get("/api/hotwords/words")
-def hotword_words(_: dict[str, Any] = Depends(current_user)) -> list[str]:
-    """Personal-mode rich-text box source of truth.
-
-    Returns every word in the exact range that `PUT /api/hotwords` replaces,
-    with no pagination cap, sorted by word. Keeping this read range identical to
-    the PUT delete range guarantees the rich-text box round-trips losslessly:
-    load -> edit -> save can never silently drop words that live beyond the
-    paginated GET /api/hotwords 1000-row limit.
-
-    Accepted AI suggestions are in range too. They are ordinary hotwords the
-    moment they are accepted, and leaving them out would mean the box reports
-    "共 0 个" right after the user accepted two of them.
-    """
+def hotword_words(user: dict[str, Any] = Depends(current_user)) -> list[str]:
+    """返回当前用户的全部个人热词(source='manual' 且 owner_id=本人),无分页,按词排序。"""
     with db() as conn:
         rows = conn.execute(
-            f"select word from hotwords where source in ({EDITABLE_HOTWORD_SOURCES_SQL}) order by word"
+            "select word from hotwords where source = 'manual' and owner_id = ? order by word",
+            (user["id"],),
         ).fetchall()
         return [row[0] for row in rows]
 
 
-@app.get("/api/hotwords/status")
-def hotword_status(_: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+@app.post("/api/hotwords")
+def create_hotword(payload: dict[str, Any], user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+    """手动新增一条个人热词(归属当前用户)。"""
+    word = (payload.get("word") or "").strip()
+    if not word:
+        raise HTTPException(status_code=400, detail="word is required")
+    if not HOTWORD_WORD_PATTERN.match(word):
+        raise HTTPException(status_code=400, detail=f"热词「{word}」含有不允许的符号，只能是中文/字母/数字")
+    kind = (payload.get("kind") or "术语").strip() or "术语"
+    aliases = (payload.get("aliases") or "").strip()
+    weight = max(1, min(int(payload.get("weight") or 8), 10))
+    ts = now()
     with db() as conn:
-        return hotword_status_payload(conn)
+        if conn.execute(
+            "select 1 from hotwords where word = ? and source = 'manual' and owner_id = ?",
+            (word, user["id"]),
+        ).fetchone():
+            raise HTTPException(status_code=409, detail="热词已存在")
+        hid = str(uuid.uuid4())
+        conn.execute(
+            """
+            insert into hotwords(
+                id,word,kind,aliases,source,scope,weight,active,state,protected,
+                frequency,confidence,score,owner_id,first_seen_at,last_seen_at,updated_at
+            )
+            values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (hid, word, kind, aliases, "manual", "personal", weight, 1, "active", 1,
+             1, 0.95, 0, user["id"], ts, ts, ts),
+        )
+        row = rowdict(conn.execute("select * from hotwords where id = ?", (hid,)).fetchone())
+        conn.execute("update hotwords set score = ? where id = ?", (hotword_row_score(row), hid))
+        audit(conn, user, "hotword.create", f"{user['name']} 新增热词：{word}。")
+        row = rowdict(conn.execute("select * from hotwords where id = ?", (hid,)).fetchone())
+        return normalize_hotword(row)
+
+
+@app.put("/api/hotwords")
+def save_all_hotwords(payload: dict[str, Any], user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+    """全量覆盖当前用户的个人热词(只删/建 owner_id=本人 且 source='manual' 的行,
+    团队及外部同步热词不受影响)。"""
+    raw_words = payload.get("words")
+    if not isinstance(raw_words, list):
+        raise HTTPException(status_code=400, detail="words 必须是字符串数组")
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for raw in raw_words:
+        if not isinstance(raw, str):
+            raise HTTPException(status_code=400, detail="words 中每一项都必须是字符串")
+        word = raw.strip()
+        if not word:
+            raise HTTPException(status_code=400, detail="热词不能为空")
+        if not HOTWORD_WORD_PATTERN.match(word):
+            raise HTTPException(status_code=400, detail=f"热词「{word}」含有不允许的符号，只能是中文/字母/数字")
+        key = word.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        cleaned.append(word)
+    words = sorted(cleaned)
+    ts = now()
+    with db() as conn:
+        conn.execute("delete from hotwords where source = 'manual' and owner_id = ?", (user["id"],))
+        for word in words:
+            hid = str(uuid.uuid4())
+            score = hotword_row_score({
+                "score": 0, "weight": 8, "kind": "术语", "source": "manual",
+                "protected": 1, "frequency": 1, "last_seen_at": ts,
+            })
+            conn.execute(
+                """
+                insert into hotwords(
+                    id,word,kind,aliases,source,scope,weight,active,state,protected,
+                    frequency,confidence,score,owner_id,first_seen_at,last_seen_at,updated_at
+                )
+                values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (hid, word, "术语", "", "manual", "personal", 8, 1, "active", 1,
+                 1, 0.95, score, user["id"], ts, ts, ts),
+            )
+        audit(conn, user, "hotword.save_all", f"{user['name']} 全量保存个人热词：共 {len(words)} 条。")
+    return {"ok": True, "count": len(words), "words": words}
+
+
+@app.delete("/api/hotwords/{hotword_id}")
+def delete_hotword(hotword_id: str, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+    """删除热词:本人可删自己的个人热词;manager/admin 可删任意。"""
+    with db() as conn:
+        row = rowdict(conn.execute("select * from hotwords where id = ?", (hotword_id,)).fetchone())
+        if not row:
+            raise HTTPException(status_code=404, detail="hotword not found")
+        is_own_manual = row.get("source") == "manual" and row.get("owner_id") == user["id"]
+        if not is_own_manual and user["role"] not in {"manager", "admin"}:
+            raise HTTPException(status_code=403, detail="无权删除该热词")
+        conn.execute("delete from hotwords where id = ?", (hotword_id,))
+        audit(conn, user, "hotword.delete", f"{user['name']} 删除热词：{row['word']}。")
+        return {"ok": True, "id": hotword_id}
 
 
 @app.patch("/api/hotwords/{hotword_id}")
@@ -4562,256 +4267,6 @@ def patch_hotword(hotword_id: str, payload: dict[str, Any], user: dict[str, Any]
         audit(conn, user, "hotword.update", f"{user['name']} 修改热词：{row['word']}。")
         changed = rowdict(conn.execute("select * from hotwords where id = ?", (hotword_id,)).fetchone())
         return normalize_hotword(changed)
-
-
-@app.post("/api/hotwords")
-def create_hotword(payload: dict[str, Any], user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
-    # Single-user desktop build: hotwords are maintained by hand.
-    word = (payload.get("word") or "").strip()
-    if not word:
-        raise HTTPException(status_code=400, detail="word is required")
-    kind = (payload.get("kind") or "term").strip() or "term"
-    aliases = (payload.get("aliases") or "").strip()
-    # 口语形式：MOM 读作「毛姆」。ASR 偏置对英文缩写的显示形式无效，纠错靠这个。
-    spoken = (payload.get("spoken") or "").strip()
-    scope = (payload.get("scope") or "global").strip() or "global"
-    weight = max(1, min(int(payload.get("weight") or 5), 10))
-    protected = 1 if payload.get("protected") else 0
-    ts = now()
-    with db() as conn:
-        if conn.execute("select 1 from hotwords where word = ?", (word,)).fetchone():
-            raise HTTPException(status_code=409, detail="热词已存在")
-        hid = str(uuid.uuid4())
-        conn.execute(
-            """
-            insert into hotwords(
-                id,word,kind,aliases,source,scope,weight,active,state,protected,
-                frequency,confidence,score,first_seen_at,last_seen_at,updated_at
-            )
-            values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-            """,
-            (hid, word, kind, aliases, "manual", scope, weight, 1, "active", protected,
-             1, 0.95, 0, ts, ts, ts),
-        )
-        if spoken:
-            conn.execute("update hotwords set spoken = ? where id = ?", (spoken, hid))
-        row = rowdict(conn.execute("select * from hotwords where id = ?", (hid,)).fetchone())
-        conn.execute("update hotwords set score = ? where id = ?", (hotword_row_score(row), hid))
-        audit(conn, user, "hotword.create", f"{user['name']} 新增热词：{word}。")
-        row = rowdict(conn.execute("select * from hotwords where id = ?", (hid,)).fetchone())
-        return normalize_hotword(row)
-
-
-# The rich-text box on the 热词 page owns exactly these sources: it lists them and
-# its save replaces them. Everything else (imports, future syncs) stays outside.
-EDITABLE_HOTWORD_SOURCES = ("manual", "AI建议")
-EDITABLE_HOTWORD_SOURCES_SQL = ",".join(f"'{item}'" for item in EDITABLE_HOTWORD_SOURCES)
-
-HOTWORD_WORD_PATTERN = re.compile(r"^[一-鿿A-Za-z0-9]+$")
-
-
-@app.put("/api/hotwords")
-def save_all_hotwords(payload: dict[str, Any], user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
-    """Personal-mode bulk replace: overwrite the current user's manual hotwords.
-
-    The personal UI is a single rich-text box where every hotword is separated by
-    the Chinese enumeration comma 「、」. The frontend splits/trims that string and
-    sends the resulting array here. This endpoint fully replaces the user's manual
-    hotwords in one transaction; it never touches team-synced hotwords (other
-    `source` values) and leaves the heavy team-mode hotword logic untouched.
-    """
-    raw_words = payload.get("words")
-    if not isinstance(raw_words, list):
-        raise HTTPException(status_code=400, detail="words 必须是字符串数组")
-
-    # Validate + dedupe (case-insensitive: English lowercased, Chinese kept as-is).
-    cleaned: list[str] = []
-    seen: set[str] = set()
-    for raw in raw_words:
-        if not isinstance(raw, str):
-            raise HTTPException(status_code=400, detail="words 中每一项都必须是字符串")
-        word = raw.strip()
-        if not word:
-            raise HTTPException(status_code=400, detail="热词不能为空")
-        if not HOTWORD_WORD_PATTERN.match(word):
-            raise HTTPException(
-                status_code=400,
-                detail=f"热词「{word}」含有不允许的符号，只能是中文/字母/数字",
-            )
-        key = word.lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        cleaned.append(word)
-
-    # Stable fallback ordering; final pinyin ordering is done by the frontend.
-    words = sorted(cleaned)
-
-    ts = now()
-    with db() as conn:
-        # Single-user desktop build: replace ALL manual hotwords regardless of
-        # owner_id. Older POST-created manual rows may have an empty owner_id; this
-        # broader delete keeps the rich-text box a clean round-trip. Team-synced
-        # hotwords (other `source` values) are untouched.
-        # Snapshot what a word already carries before the replace. Without this,
-        # every save wiped the aliases — which is exactly what an accepted
-        # "听成 X，其实是 Y" correction stores, so the learning would survive
-        # until the user next touched this box and then silently vanish.
-        previous = {
-            str(row["word"]).lower(): row
-            for row in rowsdict(
-                conn.execute(
-                    f"select word, aliases, source, kind, weight, protected, frequency, first_seen_at, last_seen_at"
-                    f" from hotwords where source in ({EDITABLE_HOTWORD_SOURCES_SQL})"
-                ).fetchall()
-            )
-        }
-        conn.execute(f"delete from hotwords where source in ({EDITABLE_HOTWORD_SOURCES_SQL})")
-        for word in words:
-            hid = str(uuid.uuid4())
-            kept = previous.get(word.lower(), {})
-            aliases = str(kept.get("aliases") or "")
-            source = str(kept.get("source") or "manual")
-            kind = str(kept.get("kind") or "术语")
-            weight = int(kept.get("weight") or 8)
-            protected = int(kept.get("protected") or 1)
-            frequency = int(kept.get("frequency") or 1)
-            first_seen = str(kept.get("first_seen_at") or ts)
-            last_seen = str(kept.get("last_seen_at") or ts)
-            score = hotword_row_score(
-                {
-                    "score": 0,
-                    "weight": weight,
-                    "kind": kind,
-                    "source": source,
-                    "protected": protected,
-                    "frequency": frequency,
-                    "last_seen_at": last_seen,
-                }
-            )
-            conn.execute(
-                """
-                insert into hotwords(
-                    id,word,kind,aliases,source,scope,weight,active,state,protected,
-                    frequency,confidence,score,owner_id,first_seen_at,last_seen_at,updated_at
-                )
-                values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                """,
-                (hid, word, kind, aliases, source, "personal", weight, 1, "active", protected,
-                 frequency, 0.95, score, user["id"], first_seen, last_seen, ts),
-            )
-        audit(conn, user, "hotword.save_all", f"{user['name']} 全量保存个人热词：共 {len(words)} 条。")
-    return {"ok": True, "count": len(words), "words": words}
-
-
-@app.post("/api/hotwords/import")
-async def import_hotwords(
-    file: UploadFile = File(...),
-    user: dict[str, Any] = Depends(current_user),
-) -> dict[str, Any]:
-    """Bulk-import hotwords from a .txt file.
-
-    Per line: `#`-comments and blank lines are ignored. Otherwise the line is
-    either a bare word, or up to 4 comma-separated fields:
-    `word, aliases(;-separated), kind, weight`. Existing words (case-insensitive)
-    and in-file duplicates are skipped. Limits: 2MB / 20000 lines.
-    """
-    raw = await file.read()
-    if len(raw) > 2 * 1024 * 1024:
-        raise HTTPException(status_code=400, detail="文件过大（上限 2MB）")
-    text: str | None = None
-    for enc in ("utf-8-sig", "gbk"):
-        try:
-            text = raw.decode(enc)
-            break
-        except UnicodeDecodeError:
-            continue
-    if text is None:
-        raise HTTPException(status_code=400, detail="文件编码无法识别（请用 UTF-8 或 GBK）")
-    lines = text.splitlines()
-    if len(lines) > 20000:
-        raise HTTPException(status_code=400, detail="行数过多（上限 20000 行）")
-
-    candidates: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for line in lines:
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        parts = [part.strip() for part in stripped.split(",")]
-        word = parts[0]
-        if not word:
-            continue
-        key = word.lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        aliases = ",".join(a.strip() for a in parts[1].split(";") if a.strip()) if len(parts) > 1 else ""
-        kind = parts[2] if len(parts) > 2 and parts[2] else "术语"
-        weight = 8
-        if len(parts) > 3 and parts[3]:
-            try:
-                weight = max(1, min(int(parts[3]), 10))
-            except ValueError:
-                weight = 8
-        candidates.append({"word": word, "aliases": aliases, "kind": kind, "weight": weight})
-
-    inserted = 0
-    skipped = 0
-    ts = now()
-    with db() as conn:
-        existing = {str(row[0]).lower() for row in conn.execute("select word from hotwords").fetchall()}
-        for cand in candidates:
-            if cand["word"].lower() in existing:
-                skipped += 1
-                continue
-            score = hotword_row_score(
-                {
-                    "score": 0,
-                    "weight": cand["weight"],
-                    "kind": cand["kind"],
-                    "source": "manual",
-                    "protected": 0,
-                    "frequency": 1,
-                    "last_seen_at": ts,
-                }
-            )
-            conn.execute(
-                """
-                insert into hotwords(
-                    id,word,kind,aliases,source,scope,weight,active,state,protected,
-                    frequency,confidence,score,first_seen_at,last_seen_at,updated_at
-                )
-                values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                """,
-                (str(uuid.uuid4()), cand["word"], cand["kind"], cand["aliases"], "manual", "personal",
-                 cand["weight"], 1, "active", 0, 1, 0.95, score, ts, ts, ts),
-            )
-            existing.add(cand["word"].lower())
-            inserted += 1
-        audit(conn, user, "hotword.import", f"{user['name']} 从 txt 导入热词：新增 {inserted}，跳过 {skipped}。")
-    return {"inserted": inserted, "skipped": skipped, "total": len(candidates)}
-
-
-@app.delete("/api/hotwords/{hotword_id}")
-def delete_hotword(hotword_id: str, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
-    with db() as conn:
-        row = rowdict(conn.execute("select * from hotwords where id = ?", (hotword_id,)).fetchone())
-        if not row:
-            raise HTTPException(status_code=404, detail="hotword not found")
-        conn.execute("delete from hotwords where id = ?", (hotword_id,))
-        audit(conn, user, "hotword.delete", f"{user['name']} 删除热词：{row['word']}。")
-        return {"ok": True, "id": hotword_id}
-
-
-@app.post("/api/hotwords/maintain")
-def maintain_hotwords_api(user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
-    if user["role"] not in {"manager", "admin"}:
-        raise HTTPException(status_code=403, detail="manager or admin only")
-    with db() as conn:
-        result = maintain_hotwords(conn)
-        audit(conn, user, "hotword.maintain", f"{user['name']} 重新计算热词评分，过期 {result.get('expired', 0)} 条。")
-        return {**result, "status": hotword_status_payload(conn)}
 
 
 @app.get("/api/voiceprints")
@@ -4851,11 +4306,9 @@ def resolve_voiceprint_scope(user: dict[str, Any], scope: str = "", team_id: str
         profile_team_id = team_id or user.get("team_id")
         mtids = managed_team_ids(user)
         if not profile_team_id:
-            # 业务管理员（org-wide manager，managed_team_ids 含 "*"）或管理员没有固定团队，
-            # 团队声纹退化为全局声纹（全员可见），而不是报错卡住。
-            if user["role"] == "admin" or "*" in mtids:
-                return "global", None
-            raise HTTPException(status_code=400, detail="team_id is required for team voiceprint")
+            # 没有可归属的团队（如经理/管理员未分配固定团队）→ 退化为全团队共享(global)，
+            # 全员可见，而不是报错卡住。这是「声纹默认全团队共享」的兜底。
+            return "global", None
         if user["role"] == "manager" and "*" not in mtids and profile_team_id not in mtids:
             raise HTTPException(status_code=403, detail="team is outside manager scope")
     return requested_scope, profile_team_id
@@ -5011,7 +4464,8 @@ def create_voiceprint(
 
 def can_manage_voiceprint(profile: dict[str, Any], user: dict[str, Any]) -> bool:
     if user["role"] == "admin":
-        return profile.get("scope") in {"global", "team"}
+        # admin 是全公司视角,可管理全部声纹(含成员个人声纹),与 admin 列表可见性一致。
+        return True
     if user["role"] == "manager":
         return profile.get("owner_id") == user["id"] or profile.get("team_id") in managed_team_ids(user)
     return profile.get("scope") == "personal" and profile.get("owner_id") == user["id"]
@@ -5052,73 +4506,28 @@ def create_voiceprint_from_recording(payload: dict[str, Any], user: dict[str, An
             if not name:
                 raise HTTPException(status_code=400, detail="name is required")
             requested_scope, profile_team_id = resolve_voiceprint_scope(user, str(payload.get("scope") or ""), str(payload.get("team_id") or ""))
-            # 同名即同一个人：并入已有档案，而不是再建一个。声纹库的意义就是
-            # 一人一档；重复提交（客户端重发、用户再点一次）不该产生孪生档案，
-            # 匹配时它们还会互相抢同一个名字。
-            duplicate = rowdict(
-                conn.execute(
-                    "select * from speaker_profiles where name = ? and active = 1"
-                    " and coalesce(scope, 'personal') = ? order by created_at limit 1",
-                    (name, requested_scope),
-                ).fetchone()
-            )
-            if duplicate:
-                existing_profile = normalize_profile(duplicate)
-                # 必须一并指向它的 id：下游用 profile_id 决定更新哪一行，只设
-                # existing_profile 会让它去更新一个新生成的 uuid，等于什么都没更新。
-                profile_id = existing_profile["id"]
-                profile_team_id = existing_profile.get("team_id")
-                threshold = clamp_voiceprint_threshold(existing_profile.get("threshold") or threshold)
-                if note is None:
-                    note = existing_profile.get("note")
-        all_rows = rowsdict(
-            conn.execute(
-                "select * from transcript_segments where recording_id = ? and speaker = ? order by start_sec",
-                (recording_id, speaker),
-            ).fetchall()
-        )
-        if not all_rows:
-            raise HTTPException(status_code=404, detail="speaker segments not found")
-        # Downgrade decision is based on the speaker's *total* speaking time in this
-        # recording, not just the picked sample rows.
-        speaker_total_duration = sum(max(0.0, float(row["end_sec"]) - float(row["start_sec"])) for row in all_rows)
+        # 取要建声纹的样本段：显式选段则用所选，否则自动挑代表片段。
+        # 不做「<5s 仅命名」的降级——能建声纹的就建，建不了的由前端不让进入此流程
+        # （不显示试听/命名建声纹入口）。
         if segment_ids:
-            selected = {sid: True for sid in segment_ids}
-            rows = [row for row in all_rows if row["id"] in selected]
+            sel = set(segment_ids)
+            rows = rowsdict(
+                conn.execute(
+                    "select * from transcript_segments where recording_id = ? and speaker = ? order by start_sec",
+                    (recording_id, speaker),
+                ).fetchall()
+            )
+            rows = [r for r in rows if r["id"] in sel]
         else:
+            all_rows = rowsdict(
+                conn.execute(
+                    "select * from transcript_segments where recording_id = ? and speaker = ? order by start_sec",
+                    (recording_id, speaker),
+                ).fetchall()
+            )
             rows = candidate_sample_rows(all_rows, limit=8)
         if not rows:
             raise HTTPException(status_code=404, detail="speaker segments not found")
-
-        # <5s total speaking time: downgrade to name-only. Backfill speaker_name on
-        # this recording (and the picked note), but do NOT build a voiceprint.
-        if speaker_total_duration < 5:
-            updated_segments = 0
-            if update_current:
-                cursor = conn.execute(
-                    """
-                    update transcript_segments
-                    set speaker_name = ?, speaker_confidence = null
-                    where recording_id = ? and speaker = ?
-                    """,
-                    (name, recording_id, speaker),
-                )
-                updated_segments = cursor.rowcount
-                conn.execute("update recordings set updated_at = ? where id = ?", (now(), recording_id))
-            audit(
-                conn,
-                user,
-                "voiceprint.assign",
-                f"{user['name']} 将录音《{rec['title']}》的 Speaker {speaker} 标记为{name}（发言不足 5 秒，未建声纹）。",
-            )
-            return {
-                "profile": None,
-                "downgraded": True,
-                "sample_count": 0,
-                "sample_duration": speaker_total_duration,
-                "sample_duration_label": seconds_label(speaker_total_duration),
-                "updated_segments": updated_segments,
-            }
 
     total_duration = sum(max(0.0, float(row["end_sec"]) - float(row["start_sec"])) for row in rows)
     if total_duration < 5:
@@ -5203,126 +4612,11 @@ def create_voiceprint_from_recording(payload: dict[str, Any], user: dict[str, An
         )
     return {
         "profile": normalize_profile(profile),
-        "downgraded": False,
         "sample_count": len(rows),
         "sample_duration": total_duration,
         "sample_duration_label": seconds_label(total_duration),
         "updated_segments": updated_segments,
     }
-
-
-def autolearn_voiceprint(
-    rec: dict[str, Any],
-    speaker: str,
-    name: str,
-    user: dict[str, Any],
-    profile_id: str | None,
-) -> dict[str, Any]:
-    """Turn a speaker rename into voiceprint training data.
-
-    Naming "说话人 3" as 张三 is the most reliable label the app ever receives —
-    a human listened and decided. Previously it was written to the transcript
-    and discarded, so the next recording made the same mistake.
-
-    Deliberately conservative in one place: if this (recording, speaker) was
-    already learned into some profile and the user is now renaming it to
-    something else, we do NOT learn again. The first pass concatenated audio
-    into that profile's sample and there is no way to take it back out, so
-    compounding the error is worse than stopping and saying so.
-    """
-    result: dict[str, Any] = {"applied": False}
-    if not voiceprint_autolearn_enabled():
-        result["reason"] = "disabled"
-        return result
-
-    # Runs *after* the rename transaction has committed: create_voiceprint_from_recording
-    # opens its own connections, and SQLite would deadlock against an open write
-    # transaction on another one.
-    with db() as conn:
-        previous = rowdict(
-            conn.execute(
-                "select * from speaker_autolearn where recording_id = ? and speaker = ?",
-                (rec["id"], speaker),
-            ).fetchone()
-        )
-        target_id = profile_id
-        if not target_id:
-            match = rowdict(
-                conn.execute(
-                    """
-                    select * from speaker_profiles
-                    where active = 1 and trim(name) = ?
-                    order by created_at desc limit 1
-                    """,
-                    (name,),
-                ).fetchone()
-            )
-            target_id = match["id"] if match else None
-
-    if previous and previous["profile_id"] != (target_id or ""):
-        result["reason"] = "renamed_again"
-        result["previous_name"] = previous["name"]
-        result["needs_manual"] = True
-        return result
-    if previous:
-        result["reason"] = "already_learned"
-        return result
-
-    payload = {
-        "recording_id": rec["id"],
-        "speaker": speaker,
-        "update_current_recording": False,  # the caller already wrote the names
-    }
-    if target_id:
-        payload["profile_id"] = target_id
-    else:
-        payload["name"] = name
-    try:
-        outcome = create_voiceprint_from_recording(payload, user)
-    except HTTPException as exc:
-        # Never let training failure break a rename — the rename is the user's
-        # actual request; this is only a side effect of it.
-        result["reason"] = f"skipped: {exc.detail}"
-        return result
-    except Exception as exc:  # missing ffmpeg, unreadable audio, disk full…
-        result["reason"] = f"skipped: {type(exc).__name__}: {exc}"
-        return result
-
-    profile = outcome.get("profile")
-    if not profile:
-        result["reason"] = "too_short"
-        result["downgraded"] = True
-        return result
-    with db() as conn:
-        conn.execute(
-            """
-            insert or replace into speaker_autolearn(id, recording_id, speaker, profile_id, name, created_at)
-            values(?,?,?,?,?,?)
-            """,
-            (str(uuid.uuid4()), rec["id"], speaker, profile["id"], name, now()),
-        )
-        conn.execute(
-            "update transcript_segments set voiceprint_id = ? where recording_id = ? and speaker = ?",
-            (profile["id"], rec["id"], speaker),
-        )
-        audit(
-            conn,
-            user,
-            "voiceprint.autolearn",
-            f"自动把 Speaker {speaker} 的 {outcome.get('sample_count', 0)} 段样本"
-            f"{'建成' if target_id is None else '补充进'}声纹「{profile['name']}」。",
-        )
-    result.update(
-        {
-            "applied": True,
-            "profile_id": profile["id"],
-            "profile_name": profile["name"],
-            "created": target_id is None,
-            "sample_count": outcome.get("sample_count", 0),
-            "sample_duration_label": outcome.get("sample_duration_label"),
-        }
-    )
-    return result
 
 
 @app.patch("/api/recordings/{recording_id}/speakers/{speaker}")
@@ -5352,14 +4646,7 @@ def patch_recording_speaker(recording_id: str, speaker: str, payload: dict[str, 
             raise HTTPException(status_code=404, detail="speaker not found")
         conn.execute("update recordings set updated_at = ? where id = ?", (now(), recording_id))
         audit(conn, user, "voiceprint.assign", f"{user['name']} 将录音《{rec['title']}》的 Speaker {speaker} 标记为{name}。")
-    learned = autolearn_voiceprint(rec, speaker, name, user, profile_id)
-    return {
-        "recording_id": recording_id,
-        "speaker": speaker,
-        "name": name,
-        "updated_segments": cursor.rowcount,
-        "autolearn": learned,
-    }
+    return {"recording_id": recording_id, "speaker": speaker, "name": name, "updated_segments": cursor.rowcount}
 
 
 @app.post("/api/recordings/{recording_id}/speakers/merge")
@@ -5430,9 +4717,9 @@ def patch_voiceprint(profile_id: str, payload: dict[str, Any], user: dict[str, A
 
 @app.delete("/api/voiceprints/{profile_id}")
 def delete_voiceprint(profile_id: str, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
-    """Hard delete a voiceprint: remove the profile row, cascade its sample rows,
-    delete the sample audio file, and NULL out referencing transcript_segments'
-    voiceprint_id (keeping the speaker_name text so transcripts stay labeled)."""
+    """硬删声纹:删 profile 行、级联 speaker_samples、删样本音频文件、把引用它的
+    transcript_segments.voiceprint_id 置 NULL(保留 speaker_name 文本,逐字稿仍带标注)。
+    走 can_manage_voiceprint 多用户作用域校验。"""
     with db() as conn:
         profile = rowdict(conn.execute("select * from speaker_profiles where id = ?", (profile_id,)).fetchone())
         if not profile:
@@ -5441,10 +4728,7 @@ def delete_voiceprint(profile_id: str, user: dict[str, Any] = Depends(current_us
         if not can_manage_voiceprint(profile, user):
             raise HTTPException(status_code=403, detail="voiceprint is outside current permission scope")
         sample_path = str(profile.get("sample_path") or "").strip()
-        conn.execute(
-            "update transcript_segments set voiceprint_id = null where voiceprint_id = ?",
-            (profile_id,),
-        )
+        conn.execute("update transcript_segments set voiceprint_id = null where voiceprint_id = ?", (profile_id,))
         conn.execute("delete from speaker_samples where profile_id = ?", (profile_id,))
         conn.execute("delete from speaker_profiles where id = ?", (profile_id,))
         audit(conn, user, "voiceprint.delete", f"{user['name']} 删除声纹样本：{profile['name']}。")
@@ -5456,141 +4740,122 @@ def delete_voiceprint(profile_id: str, user: dict[str, Any] = Depends(current_us
     return {"ok": True, "id": profile_id}
 
 
-@app.get("/api/mcp/config")
-def mcp_config(user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
-    """Everything needed to point an MCP client at this running app.
-
-    Paths are resolved here rather than documented, because they differ between
-    a dev checkout and an installed .app — and the bundle path contains a space,
-    which is exactly the kind of thing a hand-copied doc gets wrong.
-    """
-    script = ROOT / "mcp-server" / "aham_voice_mcp.py"
-    uv_candidates = [Path.home() / ".local" / "bin" / "uv", Path("/opt/homebrew/bin/uv")]
-    uv_path = next((str(item) for item in uv_candidates if item.exists()), "uv")
-    snippet = {
-        "mcpServers": {
-            "aham-voice": {
-                "command": uv_path,
-                "args": ["run", "--with", "mcp", "--with", "httpx", "python", str(script)],
-            }
-        }
-    }
-    return {
-        "script_path": str(script),
-        "script_exists": script.is_file(),
-        "runtime_path": str(RUNTIME_PATH),
-        "client_config_path": str(
-            Path.home() / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json"
-        ),
-        "uv_path": uv_path,
-        "uv_found": uv_path != "uv",
-        "snippet": json.dumps(snippet, ensure_ascii=False, indent=2),
-        # 实时数，别写死——工具增删之后写死的数字只会误导人。
-        "tool_count": (
-            script.read_text(encoding="utf-8").count("@server.tool()") if script.is_file() else 0
-        ),
-    }
-
-
-@app.get("/api/models")
-def list_models(refresh: bool = False, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
-    """Local model inventory: what is needed, what is on disk, how complete it
-    is, and live download progress. `refresh=true` re-reads the remote file
-    listing instead of the hourly cache."""
-    return models_hub.all_status(refresh=refresh)
-
-
-@app.post("/api/models/download")
-def download_models(
-    payload: dict[str, Any] | None = Body(default=None),
+@app.get("/api/audit")
+def audit_rows(
+    category: str = "",
+    q: str = "",
+    from_date: str = Query("", alias="from"),
+    to: str = "",
     user: dict[str, Any] = Depends(current_user),
-) -> dict[str, Any]:
-    """Start downloading everything that is not ready. Downloads are queued, not
-    parallel — they would only fight for the same bandwidth."""
-    include_optional = bool((payload or {}).get("include_optional"))
-    started = models_hub.start_download_all(include_optional=include_optional)
+) -> list[dict[str, Any]]:
+    require_admin(user)
+    filters: list[str] = []
+    args: list[Any] = []
+    if category:
+        filters.append("category like ?")
+        args.append(f"{category}%")
+    if q.strip():
+        like = f"%{q.strip()}%"
+        filters.append("(actor_name like ? or message like ? or category like ?)")
+        args.extend([like, like, like])
+    if from_date:
+        filters.append("created_at >= ?")
+        args.append(from_date)
+    if to:
+        filters.append("created_at <= ?")
+        args.append(to)
+    where = f"where {' and '.join(filters)}" if filters else ""
     with db() as conn:
-        audit(conn, user, "model.download", f"开始下载本地模型：{', '.join(started) or '（无需下载）'}。")
-    return {"started": started, **models_hub.all_status()}
+        return rowsdict(conn.execute(f"select * from audit {where} order by created_at desc limit 200", args).fetchall())
 
 
-@app.post("/api/models/{key}/download")
-def download_model(key: str, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
-    try:
-        models_hub.start_download(key)
-    except KeyError:
-        raise HTTPException(status_code=404, detail=f"unknown model: {key}") from None
+@app.get("/api/audit.csv")
+def audit_csv(
+    category: str = "",
+    q: str = "",
+    from_date: str = Query("", alias="from"),
+    to: str = "",
+    user: dict[str, Any] = Depends(current_user),
+) -> PlainTextResponse:
+    require_admin(user)
+    filters: list[str] = []
+    args: list[Any] = []
+    if category:
+        filters.append("category like ?")
+        args.append(f"{category}%")
+    if q.strip():
+        like = f"%{q.strip()}%"
+        filters.append("(actor_name like ? or message like ? or category like ?)")
+        args.extend([like, like, like])
+    if from_date:
+        filters.append("created_at >= ?")
+        args.append(from_date)
+    if to:
+        filters.append("created_at <= ?")
+        args.append(to)
+    where = f"where {' and '.join(filters)}" if filters else ""
     with db() as conn:
-        audit(conn, user, "model.download", f"开始下载本地模型：{key}。")
-    return models_hub.model_status(models_hub.SPEC_BY_KEY[key])
-
-
-@app.post("/api/models/{key}/cancel")
-def cancel_model_download(key: str, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
-    if key not in models_hub.SPEC_BY_KEY:
-        raise HTTPException(status_code=404, detail=f"unknown model: {key}")
-    cancelled = models_hub.cancel_download(key)
-    if not cancelled:
-        raise HTTPException(status_code=409, detail="no download running for this model")
-    # Cancellation unwinds from inside modelscope, so the thread needs a moment.
-    time.sleep(0.4)
-    return models_hub.model_status(models_hub.SPEC_BY_KEY[key])
-
-
-@app.delete("/api/models/{key}")
-def delete_model(key: str, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
-    try:
-        status = models_hub.delete_model(key)
-    except KeyError:
-        raise HTTPException(status_code=404, detail=f"unknown model: {key}") from None
-    except RuntimeError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    with db() as conn:
-        audit(conn, user, "model.delete", f"删除本地模型：{key}。")
-    return status
+        rows = rowsdict(conn.execute(f"select created_at, actor_name, category, message from audit {where} order by created_at desc", args).fetchall())
+    lines: list[list[str]] = [["created_at", "actor_name", "category", "message"]]
+    lines.extend([[row["created_at"], row["actor_name"], row["category"], row["message"]] for row in rows])
+    out = tempfile.NamedTemporaryFile("w+", newline="", encoding="utf-8", delete=False)
+    writer = csv.writer(out)
+    writer.writerows(lines)
+    out.close()
+    content = Path(out.name).read_text(encoding="utf-8")
+    Path(out.name).unlink(missing_ok=True)
+    return PlainTextResponse(content, media_type="text/csv; charset=utf-8")
 
 
 @app.get("/api/system/status")
 def system_status(user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
     require_admin(user)
+    _llm_status = get_llm_config()
     return {
         "base": str(BASE),
         "db": str(DB_PATH),
-        "paraformer": models_hub.model_path("asr").exists(),
-        "vad": models_hub.model_path("vad").exists(),
-        "punc": models_hub.model_path("punc").exists(),
-        "voiceprint": models_hub.model_path("voiceprint").exists(),
+        "paraformer": PARAFORMER.exists(),
+        "vad": VAD.exists(),
+        "punc": PUNC.exists(),
+        "voiceprint": CAMPLUS.exists(),
         "ffmpeg": FFMPEG.exists(),
-        "llm_configured": bool(get_llm_config()[0]),
-        "llm_model": get_llm_config()[2],
+        "deepseek_configured": bool(_llm_status[0]),
+        "deepseek_model": _llm_status[2],
+        "llm_configured": bool(_llm_status[0]),
+        "llm_model": _llm_status[2],
         "llm_provider": get_llm_provider(),
-        # Legacy aliases.
-        "deepseek_configured": bool(get_llm_config()[0]),
-        "deepseek_model": get_llm_config()[2],
         "segmentation": "fsmn-vad dynamic segmentation",
         "diarization": "cam++ speaker diarization",
     }
 
 
-# ---------------------------------------------------------------------------
-# Serve the built frontend from the same process (single-port desktop app).
-# Registered LAST so every /api route above takes precedence; unknown non-API
-# paths fall back to index.html for the client-side router (SPA).
-# ---------------------------------------------------------------------------
-FRONTEND_DIR = Path(os.environ.get("AHAMVOICE_FRONTEND_DIR") or (ROOT / "frontend" / "dist"))
+@app.get("/api/admin/overview")
+def admin_overview(user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+    require_admin(user)
+    today = datetime.now().strftime("%Y-%m-%d")
+    with db() as conn:
+        active_users = conn.execute("select count(*) from users where status = 'active'").fetchone()[0]
+        team_count = conn.execute("select count(*) from teams").fetchone()[0]
+        today_seconds = conn.execute(
+            "select coalesce(sum(duration), 0) from recordings where updated_at >= ? and asr_status = 'done'",
+            (today,),
+        ).fetchone()[0]
+        storage_bytes = sum(path.stat().st_size for path in RECORDINGS.glob("*") if path.is_file())
+        recent_audit = rowsdict(conn.execute("select * from audit order by created_at desc limit 4").fetchall())
+    return {
+        "active_users": active_users,
+        "team_count": team_count,
+        "today_processed_seconds": today_seconds,
+        "today_processed_label": seconds_label(today_seconds),
+        "storage_bytes": storage_bytes,
+        "storage_label": f"{storage_bytes / 1024 / 1024:.1f} MB",
+        "integrations": [
+            {"name": "ASR", "description": "Paraformer + FSMN-VAD + CT-Punc + CAM++", "ok": PARAFORMER.exists() and VAD.exists() and PUNC.exists() and CAMPLUS.exists()},
+            {"name": "云端大模型", "description": get_llm_config()[2], "ok": bool(get_llm_config()[0])},
+        ],
+        "recent_audit": recent_audit,
+    }
 
-if (FRONTEND_DIR / "index.html").exists():
-    if (FRONTEND_DIR / "assets").is_dir():
-        app.mount("/assets", StaticFiles(directory=str(FRONTEND_DIR / "assets")), name="assets")
-
-    @app.get("/{full_path:path}")
-    def serve_spa(full_path: str) -> FileResponse:
-        if full_path.startswith("api/") or full_path == "api":
-            raise HTTPException(status_code=404, detail="not found")
-        root = FRONTEND_DIR.resolve()
-        candidate = (FRONTEND_DIR / full_path).resolve()
-        # Serve a real top-level file (favicon, manifest, …) when it exists and
-        # stays inside the dist dir; otherwise hand back the SPA shell.
-        if full_path and candidate.is_file() and (candidate == root or root in candidate.parents):
-            return FileResponse(str(candidate))
-        return FileResponse(str(FRONTEND_DIR / "index.html"))
+# Register after the existing authentication and business services are defined.
+from . import voice_integration
+voice_integration.install(app)

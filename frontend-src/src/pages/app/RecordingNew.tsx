@@ -10,6 +10,7 @@ import { readApiError } from "@/api/client";
 import { formatBytes } from "@/utils/format";
 import { cn } from "@/utils/cn";
 
+const MEETING_TYPES = ["内部会议", "客户调研", "方案汇报", "销售电话"];
 const ACCEPTED = ".m4a,.mp3,.wav,.aac,.flac,.amr,.opus,.mp4,.wma";
 
 export function RecordingNew() {
@@ -17,12 +18,11 @@ export function RecordingNew() {
   const qc = useQueryClient();
   const [file, setFile] = useState<File | null>(null);
   const [title, setTitle] = useState("");
-  const [briefing, setBriefing] = useState("");
+  const [meetingType, setMeetingType] = useState(MEETING_TYPES[0]);
+  const [tag, setTag] = useState("");
+  const [autoProcess, setAutoProcess] = useState(true);
+  const [expectedSpeakers, setExpectedSpeakers] = useState("");
   const [error, setError] = useState<string | null>(null);
-  // Field-level validation messages, rendered under their own controls so the
-  // user is pointed at the exact field to fix rather than a page-level banner.
-  const [fileError, setFileError] = useState<string | null>(null);
-  const [titleError, setTitleError] = useState<string | null>(null);
   const [uploadPct, setUploadPct] = useState<number | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -41,11 +41,9 @@ export function RecordingNew() {
 
   function onFile(f: File | null) {
     setFile(f);
-    if (f) setFileError(null);
     if (f && !title.trim()) {
       const stem = f.name.replace(/\.[^.]+$/, "");
       setTitle(stem);
-      setTitleError(null);
     }
   }
 
@@ -64,49 +62,36 @@ export function RecordingNew() {
   function handleSubmit(event: FormEvent) {
     event.preventDefault();
     setError(null);
-    setFileError(null);
-    setTitleError(null);
-    let invalid = false;
     if (!file) {
-      setFileError("先选择一个音频文件。");
-      invalid = true;
+      setError("先选择一个音频文件。");
+      return;
     }
     if (!title.trim()) {
-      setTitleError("给录音起一个标题。");
-      invalid = true;
+      setError("给录音起一个标题。");
+      return;
     }
-    if (invalid || !file) return;
     setUploadPct(0);
     mutation.mutate({
       file,
       title: title.trim(),
-      briefing,
+      meeting_type: meetingType,
+      tag: tag.trim(),
+      auto_process: autoProcess,
+      expected_speakers: expectedSpeakers ? Number(expectedSpeakers) : null,
       onProgress: (p) => setUploadPct(p),
     });
   }
 
   return (
-    <div className="container container--content">
-      <div className="page-shell">
-        <PageHead
-          title="上传录音"
-          subtitle="文件大小最多 2GB。上传完成后默认自动转写并生成纪要。"
-        />
+    <div className="page-body page--object-index rn-page-narrow">
+      <PageHead
+        title="上传录音"
+        subtitle="文件大小最多 2GB。上传完成后默认自动转写并生成纪要。"
+      />
 
-        <div className="page-content">
-          <form onSubmit={handleSubmit} className="form-section">
+      <form onSubmit={handleSubmit} className="u-flex u-col u-gap-6">
         <label
-          className={cn("upload", dragOver && "dragover")}
-          style={{ position: "relative", display: "block" }}
-          role="button"
-          tabIndex={0}
-          aria-label="选择或拖拽音频文件上传"
-          onKeyDown={(e) => {
-            if (e.key === "Enter" || e.key === " ") {
-              e.preventDefault();
-              inputRef.current?.click();
-            }
-          }}
+          className={cn("upload-zone", dragOver && "is-active", file && "has-file")}
           onDragOver={(e) => {
             e.preventDefault();
             setDragOver(true);
@@ -119,74 +104,100 @@ export function RecordingNew() {
             type="file"
             accept={ACCEPTED}
             onChange={onPickInput}
-            className="sr-only"
-            tabIndex={-1}
+            className="rn-hidden-input"
           />
-          {file ? (
-            <>
-              <p className="up-t">{file.name}</p>
-              <p className="up-h">{formatBytes(file.size)} · 点击替换或拖拽新的文件</p>
-            </>
-          ) : (
-            <>
-              <p className="up-t">拖拽音频到这里 · 或点击选择</p>
-              <p className="up-h">
-                支持 <span className="text-mono">.m4a .mp3 .wav .aac .flac .amr .opus .mp4 .wma</span>
-              </p>
-            </>
-          )}
-        </label>
-        {fileError && (
-          <div className="field">
-            <p className="err">{fileError}</p>
+          <div className="upload-zone__drop">
+            {file ? (
+              <>
+                <p className="upload-zone__primary">{file.name}</p>
+                <p className="upload-zone__hint">
+                  {formatBytes(file.size)} · 点击替换或拖拽新的文件
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="upload-zone__primary">拖拽音频到这里 · 或点击选择</p>
+                <p className="upload-zone__hint">
+                  支持 <span className="accept">.m4a .mp3 .wav .aac .flac .amr .opus .mp4 .wma</span>
+                </p>
+              </>
+            )}
           </div>
-        )}
+        </label>
 
-        <FormRow label="标题" required htmlFor="rec-title" error={titleError ?? undefined}>
+        <FormRow label="标题" required htmlFor="rec-title">
           <Field
             id="rec-title"
             value={title}
-            onChange={(e) => {
-              setTitle(e.target.value);
-              if (e.target.value.trim()) setTitleError(null);
-            }}
+            onChange={(e) => setTitle(e.target.value)}
             maxLength={120}
             required
-            invalid={!!titleError}
           />
         </FormRow>
 
-        <FormRow
-          label="说明"
-          optional
-          htmlFor="rec-brief"
-          hint="这场会的背景：谁在场、什么关系、要谈什么、会提到哪些专有名词。写了会一并交给大模型，纪要会准得多——它比转写可信，因为是你写的。"
-        >
-          <textarea
-            id="rec-brief"
-            className="textarea"
-            rows={4}
-            value={briefing}
-            onChange={(e) => setBriefing(e.target.value)}
-            placeholder="例如：到客户现场交流项目推动情况。我方是实施服务商，对方王总和 IT 负责人李主任在场。围绕 ERP 与 MOM 是否同步建设、老系统架构老化展开。"
+        <FormRow label="会议类型" htmlFor="rec-type">
+          <select
+            id="rec-type"
+            className="field"
+            value={meetingType}
+            onChange={(e) => setMeetingType(e.target.value)}
+          >
+            {MEETING_TYPES.map((t) => (
+              <option key={t} value={t}>
+                {t}
+              </option>
+            ))}
+          </select>
+        </FormRow>
+
+        <FormRow label="客户 / 项目" optional htmlFor="rec-tag" hint="自由文本，用于标记和检索录音。">
+          <Field
+            id="rec-tag"
+            value={tag}
+            onChange={(e) => setTag(e.target.value)}
+            placeholder="如：浙江南都电源 · 储能项目"
           />
+        </FormRow>
+
+        <FormRow label="预计说话人数" optional htmlFor="rec-spk" hint="填了能让说话人分离更准、避免一个人被拆成好几个。不确定就留空（自动判断）。">
+          <input
+            id="rec-spk"
+            className="field rn-maxw-160"
+            type="number"
+            min={2}
+            max={50}
+            value={expectedSpeakers}
+            onChange={(e) => setExpectedSpeakers(e.target.value)}
+            placeholder="如：7"
+          />
+        </FormRow>
+
+        <FormRow label="自动处理" hint="上传后自动转写并调用 DeepSeek 生成纪要。关闭后可手动触发。">
+          <label className="u-iflex u-gap-2 u-items-center u-pointer">
+            <input
+              type="checkbox"
+              checked={autoProcess}
+              onChange={(e) => setAutoProcess(e.target.checked)}
+            />
+            <span>上传后立即开始转写</span>
+          </label>
         </FormRow>
 
         {error && <Diag code="REC_E_UPLOAD">{error}</Diag>}
 
         {mutation.isPending && uploadPct !== null && (
-          <div className="field">
-            <div className="progress-field__row">
+          <div className="card u-flex u-col u-gap-2">
+            <div className="u-flex u-between u-fs-sm">
               <span>{uploadPct < 100 ? "正在上传…" : "上传完成，正在准备处理…"}</span>
-              <span className="text-mono t-2">{uploadPct}%</span>
+              <span className="meta">{uploadPct}%</span>
             </div>
-            <div className="progress">
-              <span className="progress__bar" style={{ width: `${uploadPct}%` }} />
+            <div className="task__bar">
+              <div className="task__fill" style={{ width: `${uploadPct}%` }} />
             </div>
           </div>
         )}
 
-        <div className="form-foot">
+        <div className="u-flex u-gap-3 u-justify-end">
           <Button variant="ghost" onClick={() => navigate("/app/recordings")} type="button" disabled={mutation.isPending}>
             取消
           </Button>
@@ -194,18 +205,16 @@ export function RecordingNew() {
             variant="primary"
             type="submit"
             loading={mutation.isPending}
-            disabled={mutation.isPending}
+            disabled={!file || !title.trim()}
           >
-              {mutation.isPending
-                ? uploadPct !== null && uploadPct < 100
-                  ? `上传中 ${uploadPct}%`
-                  : "处理中…"
-                : "上传并开始"}
-            </Button>
-          </div>
-        </form>
+            {mutation.isPending
+              ? uploadPct !== null && uploadPct < 100
+                ? `上传中 ${uploadPct}%`
+                : "处理中…"
+              : autoProcess ? "上传并开始" : "上传录音"}
+          </Button>
         </div>
-      </div>
+      </form>
     </div>
   );
 }

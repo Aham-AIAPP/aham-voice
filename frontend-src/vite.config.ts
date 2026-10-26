@@ -1,8 +1,9 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import tailwindcss from "@tailwindcss/vite";
 import path from "node:path";
 
-// AhamVoice frontend.
+// Orchisky Voice frontend.
 //
 // Build target: ../frontend/dist (the static-served bundle that the existing
 // frontend_static_server.py picks up). The backend reads dist files directly,
@@ -12,7 +13,7 @@ import path from "node:path";
 // proxied to the FastAPI backend on 8000 so the same axios client works in
 // dev and prod.
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), tailwindcss()],
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "src"),
@@ -23,7 +24,7 @@ export default defineConfig({
     strictPort: false,
     proxy: {
       "/api": {
-        target: "http://localhost:8000",
+        target: process.env.VOICE_API_TARGET || "http://localhost:8000",
         changeOrigin: true,
       },
     },

@@ -1,239 +1,196 @@
-import { useEffect, useMemo, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { fetchRecording, processRecording, generateEmotion } from "@/api/endpoints";
-import { readApiError } from "@/api/client";
-import { PageHead } from "@/components/PageHead";
-import { Button } from "@/components/Button";
-import { Diag } from "@/components/Diag";
-import { Icon } from "@/components/Icon";
-import { PageLoading } from "@/components/PageLoading";
-import { Status } from "@/components/Status";
-import { formatRelative } from "@/utils/format";
-import { overallLabel } from "@/utils/status";
-import { RecordingCard } from "./RecordingCard";
-import { SpeakersCard } from "./SpeakersCard";
-import { Timeline } from "./Timeline";
-import { Preview, TRANSCRIPT_KEY, EMOTION_KEY, summaryArtifactKey, type ArtifactKey } from "./Preview";
-import { ReviseComposer } from "./ReviseComposer";
-
-function overallTone(asr: string, summary: string): React.ComponentProps<typeof Status>["tone"] {
-  if (asr === "failed" || summary === "failed") return "rust";
-  if (asr === "running" || summary === "running") return "accent";
-  if (asr === "queued") return "amber";
-  if (asr === "done" && summary === "done") return "moss";
-  if (asr === "done") return "accent";
-  return "muted";
-}
+import { useRef, useState } from 'react';
+import { Link, useLocation, useParams } from 'react-router-dom';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import { fetchRecording, processRecording, summarizeRecording, generateEmotion, recordingAudioUrl, exportSummaryVersionUrl, exportTranscriptUrl, exportEmotionUrl } from '@/api/endpoints';
+import { readApiError } from '@/api/client';
+import { Button } from '@/components/Button';
+import { Diag } from '@/components/Diag';
+import { PageLoading } from '@/components/PageLoading';
+import { EmptyState } from '@/components/EmptyState';
+import { Status } from '@/components/Status';
+import { Avatar } from '@/components/Avatar';
+import { ConfirmDialog } from '@/components/ConfirmDialog';
+import { recordingStatus, recordingState } from '@/utils/recording';
+import { SpeakersCard } from './SpeakersCard';
+import { Timeline } from './Timeline';
+import { Preview, TRANSCRIPT_KEY, EMOTION_KEY, type ArtifactKey } from './Preview';
+import { ReviseComposer } from './ReviseComposer';
+import { Drawer } from './Drawer';
 
 export function RecordingDetail() {
   const { id } = useParams<{ id: string }>();
-  const recordingId = id ?? "";
-  const navigate = useNavigate();
+  return <RecordingContent key={id} recordingId={id ?? ''} />;
+}
+
+function RecordingContent({ recordingId }: { recordingId: string }) {
   const qc = useQueryClient();
+  const location = useLocation();
+  const from = location.state?.backTo;
+  const backTo = typeof from === 'string' && (from === '/app/recordings' || from.startsWith('/app/recordings?')) ? from : '/app/recordings';
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const [mediaError, setMediaError] = useState('');
+  const [activeSegmentId, setActiveSegmentId] = useState<string | null>(null);
+  const [selectedSummaryId, setSelectedSummaryId] = useState<string | null>(null);
+  const [hasRevisionPreview, setHasRevisionPreview] = useState(false);
+  const [previewKey, setPreviewKey] = useState<ArtifactKey | null>(null);
+  const [confirmReprocess, setConfirmReprocess] = useState(false);
+  const [requestedSnapshot, setRequestedSnapshot] = useState<string | null>(null);
 
   const detail = useQuery({
-    queryKey: ["recording", recordingId],
+    queryKey: ['recording', recordingId],
     queryFn: () => fetchRecording(recordingId),
     enabled: !!recordingId,
-    refetchInterval: (q) => {
-      const data = q.state.data;
-      if (!data) return 6000;
-      const rec = data.recording;
-      const taskActive = (data.tasks ?? []).some(
-        (t) => t.status === "running" || t.status === "queued",
-      );
-      const active =
-        rec.asr_status === "running" ||
-        rec.summary_status === "running" ||
-        taskActive;
-      return active ? 4000 : false;
-    },
+    // Queued summary_only jobs do not immediately change recording status.
+    // Keep polling while this view is open, including after queued retries.
+    refetchInterval: 6000,
   });
-
-  const reprocess = useMutation({
-    mutationFn: () => processRecording(recordingId),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["recording", recordingId] });
-      qc.invalidateQueries({ queryKey: ["tasks"] });
-    },
+  const invalidate = () => {
+    qc.invalidateQueries({ queryKey: ['recording', recordingId] });
+    qc.invalidateQueries({ queryKey: ['recordings'] });
+    qc.invalidateQueries({ queryKey: ['tasks'] });
+    qc.invalidateQueries({ queryKey: ['speaker-candidates', recordingId] });
+  };
+  const action = useMutation({
+    mutationFn: (kind: 'process' | 'summary') => kind === 'process' ? processRecording(recordingId) : summarizeRecording(recordingId),
+    onSuccess: () => { setRequestedSnapshot(snapshot); invalidate(); },
   });
+  const emotionMut = useMutation({ mutationFn: () => generateEmotion(recordingId), onSuccess: invalidate });
 
-  const emotionMut = useMutation({
-    mutationFn: () => generateEmotion(recordingId),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["recording", recordingId] });
-      qc.invalidateQueries({ queryKey: ["tasks"] });
-    },
-  });
+  if (detail.isLoading) return <div className="record-loading"><PageLoading /></div>;
+  if (detail.isError) return <div className="record-loading"><Diag code="REC_E_DETAIL">{readApiError(detail.error)}</Diag><Button onClick={() => detail.refetch()}>重试</Button><Link to={backTo}>返回录音库</Link></div>;
+  if (!detail.data) return <EmptyState description="没有这条录音。" />;
 
-  // Rail-preview selection. null = floating preview closed (default).
-  const [previewKey, setPreviewKey] = useState<ArtifactKey | null>(null);
+  const { recording: rec, segments, tasks, hotword_package: pkg, emotion_analysis: emotion } = detail.data;
+  const summaries = detail.data.summaries.length ? detail.data.summaries : detail.data.summary ? [detail.data.summary] : [];
+  const currentSummary = summaries.find(s => s.is_current) ?? summaries[0] ?? null;
+  const selectedSummary = summaries.find(s => s.id === selectedSummaryId) ?? currentSummary;
+  const hasSummary = !!currentSummary?.content?.trim();
+  const showSummary = summaries.some(s => s.content?.trim());
+  const showEmotion = !!emotion?.content?.trim() || rec.asr_status === 'done';
+  const hasSelectedContent = !!selectedSummary?.content?.trim();
+  const isCurrent = selectedSummary?.id === currentSummary?.id;
+  const snapshot = JSON.stringify([rec.asr_status, rec.summary_status, currentSummary?.id, tasks.map(t => [t.id, t.status, t.updated_at])]);
+  const waiting = requestedSnapshot === snapshot;
+  const processing = recordingState(rec) === 'active';
+  const pipelineBusy = processing || waiting || action.isPending;
+  const emotionRunning = tasks.some(t => t.step.includes('情绪') && (t.status === 'running' || t.status === 'queued'));
+  const status = recordingStatus(rec);
+  const needsSummary = rec.asr_status === 'done' && (!hasSummary || rec.summary_status === 'failed');
+  const failure = [...tasks].reverse().find(t => t.status === 'failed');
+  const currentTask = [...tasks].reverse().find(t => t.status === 'running' || t.status === 'queued');
+  const summaryMissing = rec.summary_status === 'done' && !hasSummary;
+  const description = waiting ? '等待录音服务开始处理，页面会自动更新。'
+    : processing ? (currentTask ? '录音服务正在执行：' + currentTask.step + ' · ' + currentTask.elapsed_label : '录音服务正在处理，页面会自动更新。')
+    : rec.asr_status === 'failed' ? '转写失败，可以重试录音处理。'
+    : rec.summary_status === 'failed' ? '纪要生成失败，已有逐字稿和历史版本仍可查看。'
+    : summaryMissing ? '纪要状态已完成，但正文为空。需要重新生成纪要。'
+    : hasSummary ? '纪要已生成，等待你核对；可对照逐字稿、修改或导出。'
+    : rec.asr_status === 'done' ? '转写已完成，可以生成会议纪要。' : '录音已保存，可以开始转写和生成纪要。';
+  const uniqueSpeakers = new Set(segments.map(s => s.speaker)).size;
+  const matched = new Set(segments.filter(s => s.voiceprint_id).map(s => s.speaker)).size;
 
-  const summaries = detail.data?.summaries ?? [];
-  const currentSummary = useMemo(
-    () => summaries.find((s) => s.is_current) ?? summaries[0] ?? null,
-    [summaries],
-  );
-
-  // When the user revises and a new current summary appears, follow them to
-  // the new version IF they're already previewing a summary. Never auto-open
-  // the preview.
-  useEffect(() => {
-    if (!currentSummary || !previewKey || !previewKey.startsWith("summary:")) return;
-    const sid = previewKey.slice("summary:".length);
-    const old = summaries.find((s) => s.id === sid);
-    if (old && !old.is_current && currentSummary.id !== sid) {
-      setPreviewKey(summaryArtifactKey(currentSummary));
-    }
-  }, [currentSummary, previewKey, summaries]);
-
-  if (detail.isLoading) {
-    return (
-      <div className="container container--content">
-        <div className="page-shell">
-          <div className="page-state">
-            <PageLoading />
-          </div>
-        </div>
-      </div>
-    );
-  }
-  if (detail.isError) {
-    return (
-      <div className="container container--content">
-        <div className="page-shell">
-          <div className="page-state">
-            <Icon name="alert-triangle" size={48} className="page-state__icon" />
-            <div className="page-state__title">打不开这条录音</div>
-            <Diag code="REC_E_DETAIL">{readApiError(detail.error)}</Diag>
-            <div className="page-state__actions">
-              <Button variant="ghost" onClick={() => navigate("/app/recordings")}>返回列表</Button>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
-  if (!detail.data) {
-    return (
-      <div className="container container--content">
-        <div className="page-shell">
-          <div className="page-state">
-            <Icon name="mic" size={48} className="page-state__icon" />
-            <div className="page-state__title">没有这条录音</div>
-            <p className="page-state__desc">这条录音可能已被删除。</p>
-            <div className="page-state__actions">
-              <Button variant="ghost" onClick={() => navigate("/app/recordings")}>返回列表</Button>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
+  function updatePlaybackPosition(seconds: number) {
+    const segment = segments.find(s => s.start_sec <= seconds && seconds < s.end_sec);
+    setActiveSegmentId(segment?.id ?? null);
   }
 
-  const { recording: rec, segments, tasks, hotword_package: pkg, emotion_analysis: emotionAnalysis } = detail.data;
-  const emotionRunning = tasks.some(
-    (t) => t.step.includes("情绪") && (t.status === "running" || t.status === "queued"),
-  );
-  const tone = overallTone(rec.asr_status, rec.summary_status);
-  const label = overallLabel(rec.asr_status, rec.summary_status);
-  const uniqueSpeakers = new Set(segments.map((s) => s.speaker)).size;
-  const reprocessDisabled =
-    rec.asr_status === "running" ||
-    rec.summary_status === "running" ||
-    rec.asr_status === "queued";
+  function seek(seconds: number) {
+    const audio = audioRef.current;
+    if (!audio) return;
+    setMediaError('');
+    try {
+      audio.currentTime = seconds;
+      updatePlaybackPosition(seconds);
+      audio.play().catch(() => setMediaError('播放未开始，可使用播放器重试。'));
+    } catch { setMediaError('音频尚未就绪，加载后再定位。'); }
+  }
 
-  const composerDisabled =
-    rec.asr_status !== "done" || rec.summary_status === "running" || !currentSummary;
-  const composerDisabledReason =
-    rec.asr_status !== "done"
-      ? "转写完成后才能改纪要"
-      : rec.summary_status === "running"
-        ? "纪要正在生成…"
-        : !currentSummary
-          ? "先在右侧生成一版纪要再来修改"
-          : undefined;
-
-  const subtitle = (
-    <>
-      {rec.duration_label} · {segments.length} 段转写 · {uniqueSpeakers} 位说话人
-      {rec.tag ? ` · ${rec.tag}` : ""} · {formatRelative(rec.updated_at)}
-    </>
-  );
-
-  return (
-    <div className="container container--content">
-      <div className="page-shell">
-        <PageHead
-          title={rec.title}
-          subtitle={subtitle}
-          actions={
-            <div className="row" style={{ gap: "var(--s3)" }}>
-              <Status tone={tone}>{label}</Status>
-              <Button
-                variant="primary"
-                loading={reprocess.isPending}
-                disabled={reprocessDisabled}
-                onClick={() => reprocess.mutate()}
-              >
-                <Icon name="refresh-cw" size={14} /> 重新处理
-              </Button>
-            </div>
-          }
-        />
-
-        <div className="page-content">
-          <div style={{ display: "flex", flexDirection: "column", gap: "var(--s5)" }}>
-            <RecordingCard recording={rec} segments={segments} hotwordPackage={pkg} />
-
-            <SpeakersCard recordingId={recordingId} asrStatus={rec.asr_status} />
-
-
-            <Timeline
-              recording={rec}
-              tasks={tasks}
-              summaries={summaries}
-              segments={segments}
-              emotion={emotionAnalysis}
-              onPreviewSummary={(summaryId) => setPreviewKey(`summary:${summaryId}`)}
-              onPreviewTranscript={() => setPreviewKey(TRANSCRIPT_KEY)}
-              onPreviewEmotion={() => setPreviewKey(EMOTION_KEY)}
-              onGenerateEmotion={() => emotionMut.mutate()}
-              emotionPending={emotionMut.isPending || emotionRunning}
-              activePreviewKey={previewKey}
-            />
-
-            <ReviseComposer
-              recordingId={recordingId}
-              disabled={composerDisabled}
-              disabledReason={composerDisabledReason}
-            />
-          </div>
-        </div>
+  return <div className="record-page">
+    <div className="record-heading">
+      <Link to={backTo} className="record-back">返回录音库</Link>
+      <div className="record-title-row">
+        <h1>{rec.title}</h1>
+        {pipelineBusy ? <Button variant="primary" disabled>{waiting ? '等待处理' : '处理中'}</Button>
+          : needsSummary ? <Button variant="primary" onClick={() => action.mutate('summary')}>{rec.summary_status === 'failed' || summaryMissing ? '重试纪要' : '生成纪要'}</Button>
+          : rec.asr_status !== 'done' ? <Button variant="primary" onClick={() => action.mutate('process')}>{rec.asr_status === 'failed' ? '重试转写' : '开始处理'}</Button>
+          : hasSelectedContent ? <a className={'btn ' + (hasRevisionPreview ? 'btn--secondary' : 'btn--primary')} href={exportSummaryVersionUrl(recordingId, selectedSummary!.id)} download>导出纪要{!isCurrent ? ' v' + selectedSummary!.version : ''}</a> : null}
       </div>
-
-      {/* AI rail — floating overlay; never squeezes the centered main content.
-          Slides in only when an artifact is selected from the Timeline. */}
-      {previewKey !== null && (
-        <>
-          <div className="scrim" onClick={() => setPreviewKey(null)} />
-          {/* Official .drawer; only the width differs from --rightbar-w, so it
-              is the single inline override. .detail-preview stretches the
-              window child to fill the rail height. */}
-          <aside className="drawer detail-preview" style={{ width: "min(560px, 92vw)" }}>
-            <Preview
-              recordingId={recordingId}
-              summaries={summaries}
-              segments={segments}
-              emotion={emotionAnalysis}
-              selected={previewKey}
-              onSelect={setPreviewKey}
-              onClose={() => setPreviewKey(null)}
-            />
-          </aside>
-        </>
-      )}
+      <div className="record-subtitle"><Status tone={summaryMissing ? 'rust' : status.tone}>{summaryMissing ? '纪要正文缺失' : status.label}</Status><span className="tnum">{rec.duration_label}</span><span>{segments.length} 段发言 · {uniqueSpeakers} 位说话人</span></div>
+      <div className="record-next" role="status">{description}{processing && currentTask && <progress value={currentTask.progress} max={100} aria-label="当前处理进度" />}</div>
+      {!processing && !waiting && recordingState(rec) === 'failed' && failure?.error && <p className="record-error">{failure.error}</p>}
+      {action.isError && <Diag code="REC_E_ACTION">{readApiError(action.error)}</Diag>}
     </div>
-  );
+    <div className="record-layout">
+      <div className="record-content">
+        <div className="record-reading-tools">
+          <section className="record-audio" aria-label="录音播放">
+            <audio ref={audioRef} controls preload="metadata" src={recordingAudioUrl(recordingId)} onError={() => setMediaError('音频加载失败，可刷新页面重试。')} onPlaying={() => setMediaError('')} onTimeUpdate={e => updatePlaybackPosition(e.currentTarget.currentTime)} onSeeked={e => updatePlaybackPosition(e.currentTarget.currentTime)} />
+            {mediaError && <p className="record-error" role="alert">{mediaError}</p>}
+          </section>
+          <nav className="record-anchors" aria-label="内容导航">{showSummary && <a href="#record-summary">会议纪要</a>}{segments.length > 0 && <a href="#record-transcript">逐字稿</a>}{showEmotion && <a href="#record-emotion">情绪分析</a>}</nav>
+        </div>
+        {showSummary && <section id="record-summary" className="record-section">
+          <header className="record-section-head"><h2>会议纪要</h2>
+            {summaries.length > 0 && <select aria-label="纪要版本" value={selectedSummary?.id ?? ''} onChange={e => setSelectedSummaryId(e.target.value === currentSummary?.id ? null : e.target.value)}>
+              {summaries.map(s => <option key={s.id} value={s.id}>v{s.version}{s.id === currentSummary?.id ? ' · 当前版本' : ' · 历史版本'}</option>)}
+            </select>}
+          </header>
+          {selectedSummary && <p className="record-source">AI 生成 · {selectedSummary.model} · {selectedSummary.created_at}{segments.length > 0 && <> · <a href="#record-transcript">查看逐字稿依据</a></>}{!isCurrent && <Button size="sm" onClick={() => setSelectedSummaryId(null)}>返回当前版本</Button>}</p>}
+          {(pipelineBusy || needsSummary || rec.asr_status !== 'done') && hasSelectedContent && <a className="record-link" href={exportSummaryVersionUrl(recordingId, selectedSummary!.id)} download>下载此版本</a>}
+          {hasSelectedContent ? <article className="markdown record-prose"><ReactMarkdown remarkPlugins={[remarkGfm]}>{selectedSummary!.content}</ReactMarkdown></article>
+            : <p className="record-muted">{pipelineBusy ? '纪要处理中，完成后自动显示。' : '还没有可阅读的纪要正文。'}</p>}
+          {hasSummary && isCurrent && <details className="record-revise"><summary>修改纪要</summary>
+            <ReviseComposer recordingId={recordingId} currentSummaryId={currentSummary!.id} onPreviewChange={setHasRevisionPreview} disabled={pipelineBusy || rec.asr_status !== 'done'} disabledReason={pipelineBusy ? '处理完成后可以修改纪要' : '转写完成后可以修改纪要'} />
+          </details>}
+          {!isCurrent && hasSelectedContent && <a className="record-link" href={exportSummaryVersionUrl(recordingId, selectedSummary!.id)} download>下载此历史版本</a>}
+        </section>}
+        {segments.length > 0 && <section id="record-transcript" className="record-section">
+          <header className="record-section-head"><h2>逐字稿 <span className="record-muted">{segments.length} 段</span></h2>{segments.length > 0 && <a className="record-link" href={exportTranscriptUrl(recordingId)} download>导出逐字稿</a>}</header>
+          <p className="record-muted transcript-hint">点击时间，定位并播放对应发言。</p>
+          {segments.length ? <ol className="record-transcript">{segments.map(seg => <li key={seg.id} aria-current={activeSegmentId === seg.id ? 'true' : undefined}>
+            <div className="transcript-meta"><button className="transcript-time tnum" onClick={() => seek(seg.start_sec)} aria-label={'播放 ' + seg.start_label + ' 的发言'}>{seg.start_label}</button><span>{seg.speaker_name || '说话人 ' + seg.speaker}</span></div>
+            <p>{seg.text}</p>
+          </li>)}</ol> : <p className="record-muted">{processing ? '转写进行中，完成后自动显示。' : '还没有逐字稿。'}</p>}
+        </section>}
+        {showEmotion && <section id="record-emotion" className="record-section">
+          <header className="record-section-head"><h2>对话情绪分析</h2>{emotion?.content?.trim() && <a className="record-link" href={exportEmotionUrl(recordingId)} download>导出分析</a>}</header>
+          {emotion?.content?.trim() ? <details className="record-fold"><summary>查看分析 · v{emotion.version}</summary><p className="record-source">AI 生成 · {emotion.model} · <a href="#record-transcript">查看逐字稿依据</a></p><article className="markdown record-prose"><ReactMarkdown remarkPlugins={[remarkGfm]}>{emotion.content}</ReactMarkdown></article></details> : <>
+            <p className="record-muted">按需分析说话情绪、客户意向与异议。</p>
+            <Button variant="secondary" disabled={rec.asr_status !== 'done' || pipelineBusy || emotionRunning} loading={emotionMut.isPending} onClick={() => emotionMut.mutate()}>{emotionRunning ? '正在分析' : '生成情绪分析'}</Button>
+          </>}
+          {emotionMut.isError && <Diag code="REC_E_EMOTION">{readApiError(emotionMut.error)}</Diag>}
+        </section>}
+        <details className="record-fold record-history"><summary>处理与修改记录 <span>{tasks.length} 个任务 · {summaries.length} 个纪要版本 · {rec.owner_name} · {rec.updated_at}</span></summary>
+          <Timeline recording={rec} tasks={tasks} summaries={summaries} segments={segments} emotion={emotion}
+            onPreviewSummary={summaryId => setPreviewKey('summary:' + summaryId)}
+            onPreviewTranscript={() => setPreviewKey(TRANSCRIPT_KEY)} onPreviewEmotion={() => setPreviewKey(EMOTION_KEY)}
+            onGenerateEmotion={() => emotionMut.mutate()} emotionPending={emotionMut.isPending || emotionRunning || pipelineBusy} activePreviewKey={previewKey} />
+        </details>
+      </div>
+      <aside className="record-properties" aria-label="录音属性">
+        <h2>录音属性</h2>
+        <dl>
+          <div><dt>所属成员</dt><dd><Avatar name={rec.owner_name} size="sm" />{rec.owner_name || '未指定'}</dd></div>
+          <div><dt>会议类型</dt><dd>{rec.meeting_type || '未选择'}</dd></div>
+          <div><dt>客户 / 项目</dt><dd>{rec.tag || '未填写'}</dd></div>
+          <div><dt>原始文件</dt><dd>{rec.filename}</dd></div>
+          <div><dt>创建时间</dt><dd>{rec.created_at}</dd></div>
+          <div><dt>更新时间</dt><dd>{rec.updated_at}</dd></div>
+          <div><dt>热词</dt><dd>{pkg?.asr_terms_count ? '已启用 ' + pkg.asr_terms_count + ' 条' : '未启用'}</dd></div>
+          <div><dt>声纹匹配</dt><dd>{uniqueSpeakers ? matched + ' / ' + uniqueSpeakers + ' 位' : '等待转写'}</dd></div>
+        </dl>
+        {segments.length > 0 && <SpeakersCard recordingId={recordingId} asrStatus={rec.asr_status} />}
+        <details className="record-fold record-advanced"><summary>处理操作</summary>
+          <p className="record-muted">重新处理会重新转写并生成纪要，已有的说话人命名可能需要重新核对。</p>
+          <Button variant="secondary" disabled={pipelineBusy} onClick={() => setConfirmReprocess(true)}>重新处理整条录音</Button>
+        </details>
+      </aside>
+    </div>
+    <ConfirmDialog open={confirmReprocess} title="重新处理整条录音？" body="将重新转写并生成纪要，当前逐字稿和说话人结果会更新。" confirmText="重新处理" onCancel={() => setConfirmReprocess(false)} onConfirm={() => { setConfirmReprocess(false); action.mutate('process'); }} />
+    <Drawer open={previewKey !== null} raw onClose={() => setPreviewKey(null)}>
+      {previewKey !== null && <Preview recordingId={recordingId} summaries={summaries} segments={segments} emotion={emotion} selected={previewKey} onSelect={setPreviewKey} onClose={() => setPreviewKey(null)} />}
+    </Drawer>
+  </div>;
 }

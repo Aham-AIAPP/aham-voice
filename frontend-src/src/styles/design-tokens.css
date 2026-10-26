@@ -1,14 +1,507 @@
 /* =============================================================================
-   AhamVoice foundation tokens.
-   The official aham-ui.css owns colors, type scale, radii, shadows, weights,
-   motion and both themes. This file only adds the app-level tokens the official
-   sheet does not ship: an extra-small type step and the skip-link z-index.
+   Aham Design Tokens
+   Visual basis: claude.ai — cool paper, restrained chrome, conversational.
+   All colors in oklch. Light is default; .dark overrides.
    ============================================================================= */
-:root {
-  /* Extra-small type step (official scale starts at --text-xs = 12px). */
-  --text-2xs: 0.6875rem; /* 11 */
 
-  /* Z-index — only the accessibility skip link lives outside the official
-     component layering. */
-  --z-skip: 70;
+:root {
+  /* ---------------------------------------------------------------------------
+     PRIMITIVE COLOR SCALES
+     Reference only. Components consume the SEMANTIC tokens below.
+     --------------------------------------------------------------------------- */
+
+  /* Paper — pure neutral grays (the canvas itself).
+     Chroma = 0 on every step. The system is explicitly NOT tinted blue:
+     a white that reads as anything but white is a bug, not a feature. */
+  --paper-50:  oklch(1     0 0);        /* #ffffff — pure white, canvas */
+  --paper-100: oklch(0.995 0 0);        /* ~#fefefe — sidebar / surface */
+  --paper-200: oklch(0.973 0 0);        /* ~#f6f6f6 — panel / sunken */
+  --paper-300: oklch(0.928 0 0);
+  --paper-400: oklch(0.830 0 0);
+  --paper-500: oklch(0.700 0 0);
+  --paper-600: oklch(0.555 0 0);
+  --paper-700: oklch(0.420 0 0);
+  --paper-800: oklch(0.300 0 0);
+  --paper-900: oklch(0.225 0 0);
+  --paper-950: oklch(0.170 0 0);
+
+  /* Steel — Aham's signature steel-blue accent scale.
+     Canonical name is `--steel-*`; values are pinned to Aham v6.1 (#336EE8…)
+     in the override block at the end of :root. Read the semantic `--accent-*`
+     tokens in component CSS, not this raw scale. */
+  --steel-50:   oklch(0.970 0.020 248);
+  --steel-100:  oklch(0.940 0.040 248);
+  --steel-200:  oklch(0.880 0.075 248);
+  --steel-300:  oklch(0.805 0.105 248);
+  --steel-400:  oklch(0.725 0.135 248);
+  --steel-500:  oklch(0.625 0.155 248);   /* primary accent */
+  --steel-600:  oklch(0.560 0.170 248);
+  --steel-700:  oklch(0.480 0.160 248);
+  --steel-800:  oklch(0.390 0.130 248);
+  --steel-900:  oklch(0.315 0.100 248);
+
+  /* Functional hues (kept low-chroma, paper-friendly) */
+  --moss-500:  oklch(0.620 0.110 145);  /* success */
+  --moss-100:  oklch(0.940 0.030 145);
+  --amber-500: oklch(0.760 0.140 75);   /* warning */
+  --amber-100: oklch(0.950 0.045 80);
+  --rust-500:  oklch(0.595 0.180 28);   /* danger  */
+  --rust-100:  oklch(0.940 0.035 28);
+  --slate-500: oklch(0.620 0.025 240);  /* info    */
+  --slate-100: oklch(0.945 0.012 240);
+
+  /* ---------------------------------------------------------------------------
+     SEMANTIC TOKENS — LIGHT (default)
+     --------------------------------------------------------------------------- */
+
+  /* Surfaces — three steps, pure neutral.
+     Canvas (white) is the MAIN content area; surface is chrome (sidebars, top
+     bars); panel is for cards/wells that need to read as distinct on white. */
+  --bg-canvas:        var(--paper-50);    /* #ffffff — main content area */
+  --bg-surface:       var(--paper-100);   /* #fefefe — sidebar, top bar, chrome */
+  --bg-panel:         var(--paper-200);   /* ~#f6f6f6 — cards / panels on canvas */
+  --bg-elevated:      #ffffff;            /* modals, popovers (always pure white) */
+  --bg-sunken:        var(--paper-200);   /* code blocks ONLY, plus PDF/slide letterbox.
+                                            Same pixel value as --bg-panel by design;
+                                            the semantic distinction is for code-well
+                                            recoloring in dark mode — do not swap. */
+  --bg-overlay:       oklch(0.170 0 0 / 0.50);   /* modal scrim */
+
+  /* Subtle fills (hover/active backgrounds) — neutral, no hue */
+  --fill-subtle:      oklch(0 0 0 / 0.04);
+  --fill-muted:       oklch(0 0 0 / 0.07);
+  --fill-strong:      oklch(0 0 0 / 0.12);
+
+  /* Foreground (text + iconography) */
+  --fg-default:       var(--paper-900);   /* primary text */
+  --fg-muted:         var(--paper-700);   /* secondary text */
+  --fg-subtle:        var(--paper-600);   /* tertiary, captions */
+  --fg-faint:         var(--paper-500);   /* placeholders */
+  --fg-on-accent:     var(--paper-50);    /* text on clay surfaces */
+  --fg-inverted:      var(--paper-50);
+
+  /* Borders — pure neutral */
+  --border-default:   oklch(0 0 0 / 0.09);
+  --border-strong:    oklch(0 0 0 / 0.16);
+  --border-focus:     var(--accent-default);
+
+  /* Accent (brand) — read these in component CSS, not the steel scale */
+  --accent-default:   var(--steel-500);
+  --accent-hover:     var(--steel-600);
+  --accent-active:    var(--steel-700);
+  --accent-soft:      var(--steel-100);
+  --accent-fg:        var(--paper-50);    /* text on accent */
+
+  /* Status */
+  --success-fg:       var(--moss-500);
+  --success-bg:       var(--moss-100);
+  --warning-fg:       oklch(0.520 0.135 70);
+  --warning-bg:       var(--amber-100);
+  --danger-fg:        var(--rust-500);
+  --danger-bg:        var(--rust-100);
+  --info-fg:          var(--slate-500);
+  --info-bg:          var(--slate-100);
+
+  /* ---------------------------------------------------------------------------
+     FINANCE PATCH (v3) — threshold lights, editable-cell roles, units.
+     These tokens carry RULE semantics (a value vs a threshold), distinct from
+     the existing --success / --warning / --danger which carry STATE semantics.
+     The two never reach for the same shape: status uses .status (dot + text),
+     thresholds use .light (dot + value + rule tail).
+     --------------------------------------------------------------------------- */
+
+  /* Threshold lights — green / amber / red, fg only. Never fill. */
+  --threshold-green:  var(--success-fg);
+  --threshold-amber:  var(--warning-fg);
+  --threshold-red:    var(--danger-fg);
+
+  /* Editable-grid cell roles. Yellow is the institutional color: 出纳 knows it
+     by muscle memory as "this is yours to fill". Calc is the canvas itself.
+     Ref is a one-step-up panel so a formula can visually trace its inputs. */
+  --cell-input-bg:    oklch(0.985 0.050 95);
+  --cell-input-bg-hover: oklch(0.975 0.060 95);
+  --cell-input-border: oklch(0.875 0.080 90 / 0.6);
+  --cell-calc-bg:     var(--bg-canvas);
+  --cell-calc-fg:     var(--fg-muted);
+  --cell-ref-bg:      var(--bg-panel);
+  --cell-ref-fg:      var(--fg-default);
+  --cell-locked-bg:   oklch(0.978 0 0);
+
+  /* Cell signal colors — printed when a cell carries variance/threshold info */
+  --cell-variance-fg: var(--danger-fg);
+  --cell-positive-fg: var(--success-fg);
+
+  /* Financial number unit color — smaller, subtler tail after numbers
+     ("1,205 元", "42.3 万元"). Always trails, never leads. */
+  --text-unit:        var(--fg-subtle);
+
+  /* Print bleed and trim — used by pocket-card and one-pager print stylesheets */
+  --print-bleed:      2mm;
+  --print-trim-a4:    210mm 297mm;
+  --print-trim-a5:    148mm 210mm;
+  --print-trim-card:  85mm 54mm;
+
+  /* Focus ring */
+  --ring:             oklch(0.625 0.155 248 / 0.32);
+  --ring-offset:      var(--bg-canvas);
+
+  /* ---------------------------------------------------------------------------
+     TYPOGRAPHY
+     --------------------------------------------------------------------------- */
+
+  /* Font stacks include CJK fallbacks: PingFang on macOS/iOS, Microsoft YaHei
+     on Windows, Noto Sans SC as the webfont, and a final system fallback.
+     This keeps Chinese text legible without forcing a separate font file. */
+  --font-sans: "Inter Tight", "Söhne", -apple-system, BlinkMacSystemFont,
+               "Segoe UI", system-ui,
+               "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI",
+               "Microsoft YaHei", "Noto Sans SC", "Source Han Sans SC",
+               sans-serif;
+  --font-mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, Consolas,
+               "PingFang SC", "Microsoft YaHei UI", monospace;
+
+  /* Font sizes — major-second-ish scale, paper-friendly */
+  --text-2xs:  0.6875rem;   /* 11 */
+  --text-xs:   0.75rem;     /* 12 */
+  --text-sm:   0.8125rem;   /* 13 */
+  --text-base: 0.9375rem;   /* 15 — default body */
+  --text-md:   1rem;        /* 16 */
+  --text-lg:   1.125rem;    /* 18 */
+  --text-xl:   1.3125rem;   /* 21 */
+  --text-2xl:  1.625rem;    /* 26 */
+  --text-3xl:  2.0625rem;   /* 33 */
+  --text-4xl:  2.625rem;    /* 42 */
+  --text-5xl:  3.5rem;      /* 56 */
+
+  /* Weights — kept tight */
+  --weight-regular:  400;
+  --weight-medium:   500;
+  --weight-semibold: 600;
+  --weight-bold:     700;
+
+  /* Line heights */
+  --leading-tight:   1.15;
+  --leading-snug:    1.30;
+  --leading-normal:  1.55;   /* body default */
+  --leading-relaxed: 1.70;
+  --leading-loose:   1.85;
+
+  /* Letter spacing */
+  --tracking-tight:  -0.02em;
+  --tracking-snug:   -0.01em;
+  --tracking-normal: 0;
+  --tracking-wide:   0.01em;
+  --tracking-caps:   0.06em;
+
+  /* ---------------------------------------------------------------------------
+     SPACING — 4px base, tuned for generous whitespace
+     --------------------------------------------------------------------------- */
+  --space-0:  0;
+  --space-px: 1px;
+  --space-1:  0.25rem;   /*  4 */
+  --space-2:  0.5rem;    /*  8 */
+  --space-3:  0.75rem;   /* 12 */
+  --space-4:  1rem;      /* 16 */
+  --space-5:  1.25rem;   /* 20 */
+  --space-6:  1.5rem;    /* 24 */
+  --space-8:  2rem;      /* 32 */
+  --space-10: 2.5rem;    /* 40 */
+  --space-12: 3rem;      /* 48 */
+  --space-16: 4rem;      /* 64 */
+  --space-20: 5rem;      /* 80 */
+  --space-24: 6rem;      /* 96 */
+  --space-32: 8rem;      /*128 */
+
+  /* ---------------------------------------------------------------------------
+     RADII
+     --------------------------------------------------------------------------- */
+  --radius-none: 0;
+  --radius-xs:   0.25rem;   /*  4 — chips */
+  --radius-sm:   0.375rem;  /*  6 — inputs, small buttons */
+  --radius-md:   0.5rem;    /*  8 — buttons, tags */
+  --radius-lg:   0.75rem;   /* 12 — cards */
+  --radius-xl:   1rem;      /* 16 — modals */
+  --radius-2xl:  1.25rem;   /* 20 — canvases */
+  --radius-full: 9999px;    /* pills, avatars */
+
+  /* ---------------------------------------------------------------------------
+     SHADOWS — soft, quiet, never harsh. Paper not glass.
+     --------------------------------------------------------------------------- */
+  --shadow-none: none;
+  --shadow-xs:  0 1px 2px 0 oklch(0 0 0 / 0.05);
+  --shadow-sm:  0 1px 2px 0 oklch(0 0 0 / 0.06),
+                0 1px 3px 0 oklch(0 0 0 / 0.05);
+  --shadow-md:  0 2px 4px -1px oklch(0 0 0 / 0.07),
+                0 4px 8px -2px oklch(0 0 0 / 0.06);
+  --shadow-lg:  0 4px 8px -2px oklch(0 0 0 / 0.07),
+                0 10px 24px -4px oklch(0 0 0 / 0.09);
+  --shadow-xl:  0 8px 16px -4px oklch(0 0 0 / 0.09),
+                0 24px 48px -8px oklch(0 0 0 / 0.14);
+  --shadow-inset: inset 0 1px 0 0 oklch(1 0 0 / 0.6);
+
+  /* ---------------------------------------------------------------------------
+     MOTION
+     --------------------------------------------------------------------------- */
+  --duration-instant: 80ms;
+  --duration-fast:    140ms;
+  --duration-base:    220ms;
+  --duration-slow:    360ms;
+  --duration-slower:  520ms;
+
+  --ease-standard:    cubic-bezier(0.22, 0.61, 0.36, 1);   /* default */
+  --ease-entrance:    cubic-bezier(0.16, 1, 0.30, 1);      /* enter */
+  --ease-exit:        cubic-bezier(0.50, 0, 0.75, 0);      /* exit */
+  --ease-emphasis:    cubic-bezier(0.20, 0, 0, 1);         /* large moves */
+  --ease-linear:      linear;
+
+  /* ---------------------------------------------------------------------------
+     LAYOUT / ICON
+     --------------------------------------------------------------------------- */
+  --icon-xs: 12px;
+  --icon-sm: 14px;
+  --icon-md: 16px;     /* default — pairs with body text */
+  --icon-lg: 20px;
+  --icon-xl: 24px;
+  --icon-2xl: 32px;
+
+  --container-prose:    66ch;
+  --container-readable: 78ch;
+  --container-narrow:   480px;
+  --container-app:      1200px;
+
+  /* Page-body container (v2.4). The single width that every page-template uses
+     for its title, subtitle, filter-bar, body, and pagination. Bake this into
+     `.page-head` / `.page-body` so subtitles don't wrap at 32ch while the table
+     below them runs to the viewport edge. */
+  --container-page:     min(1180px, 100% - 2 * var(--space-10));
+  --container-page-narrow: min(720px, 100% - 2 * var(--space-10));
+
+  /* Conversation layouts (v2.5). The message stream is always 720px wide and
+     centered; the split-panel rail is a flexible-but-bounded right column. */
+  --conversation-stream-w:    720px;
+  --split-rail-w:             min(420px, 38vw);
+  --split-rail-w-collapsed:   40px;
+
+  /* App-shell dimensions (v2.4). One sidebar width, one topbar height — same
+     on every page so the content column origin is stable. */
+  --shell-sidebar-w:    280px;
+  --shell-topbar-h:     56px;
+  --shell-account-h:    72px;
+
+  /* ---------------------------------------------------------------------------
+     Z-INDEX SCALE (v2.4)
+     Eight-step ladder. Don't invent new layers; pick the named one that fits.
+     --------------------------------------------------------------------------- */
+  --z-base:     0;
+  --z-raised:   10;   /* sticky table headers, sticky filter bars */
+  --z-shell:    20;   /* app-shell sidebar and topbar */
+  --z-dock:     30;   /* workspace dock (bottom floating island) */
+  --z-drawer:   40;   /* side drawer (relation picker, preview drawer) */
+  --z-modal:    50;   /* modal (preview modal, danger confirm) */
+  --z-popover:  60;   /* popovers, dropdowns, tooltips */
+  --z-skip:     70;   /* reserved — accessibility skip links, never product UI */
+
+  /* ===========================================================================
+     AHAM UI v6.1 对齐覆盖（精确 hex，源自 aham-ui tokens.json 6.1.0）
+     后声明优先：把语义 token 精确钉到 v6.1 取值。颜色 / 字阶 / 阴影对齐；
+     间距(4基) 与圆角档此前已与 v6.1 一致，无需覆盖。
+     =========================================================================== */
+
+  /* — 三层表面 + 文字四级 + 边框（中性无暖调）— */
+  --bg-canvas:   #FFFFFF;            /* tier1 内容/卡片/输入 */
+  --bg-surface:  #F3F3F3;            /* tier2 侧栏/顶栏 chrome */
+  --bg-panel:    #F3F3F3;            /* tier2 面板/下沉块 */
+  --bg-elevated: #FFFFFF;            /* 浮层始终纯白 */
+  --bg-sunken:   #F3F3F3;
+  --bg-overlay:  rgba(20, 20, 20, 0.28);
+  --fill-subtle: rgba(20, 20, 20, 0.04);
+  --fill-muted:  rgba(20, 20, 20, 0.08);
+  --fill-strong: rgba(20, 20, 20, 0.12);
+  --fg-default:  #262626;            /* ink primary */
+  --fg-muted:    #6E6E6E;            /* ink secondary */
+  --fg-subtle:   #9B9B9B;            /* ink tertiary（占位/装饰，非正文）*/
+  --fg-faint:    #C4C4C4;            /* ink quaternary（最弱分隔/禁用）*/
+  --fg-on-accent:#FFFFFF;
+  --fg-inverted: #FFFFFF;
+  --border-default: #E7E7E7;         /* tier3 分隔/边框 */
+  --border-strong:  #C4C4C4;
+  --border-focus:   #336EE8;
+
+  /* — 单蓝（唯一色相，仅点缀）— */
+  --accent-default: #336EE8;
+  --accent-hover:   #5C8BED;
+  --accent-active:  #164EC3;
+  --accent-soft:    #EDF0F7;
+  --accent-fg:      #FFFFFF;
+  --steel-500: #336EE8;  --steel-600: #164EC3;  --steel-100: #EDF0F7;
+
+  /* — 语义色（极弱，仅真风险）— */
+  --success-fg: #5A7A60;  --success-bg: #F0F2F0;
+  --warning-fg: #8A7333;  --warning-bg: #F4F1E9;
+  --danger-fg:  #9E3D31;  --danger-bg:  #F4ECEA;
+  --info-fg:    #6E6E6E;  --info-bg:    #F3F3F3;
+  --moss-500: #5A7A60;  --amber-500: #8A7333;  --rust-500: #9E3D31;  --slate-500: #6E6E6E;
+  --threshold-green: #5A7A60;  --threshold-amber: #8A7333;  --threshold-red: #9E3D31;
+  --ring: rgba(51, 110, 232, 0.20);
+
+  /* — 文字样式体系（字号 px，body 默认 14）— */
+  --text-2xs:  0.6875rem;  /* 11 */
+  --text-xs:   0.75rem;    /* 12 caption */
+  --text-sm:   0.8125rem;  /* 13 subhead/footnote */
+  --text-base: 0.875rem;   /* 14 — body 默认 */
+  --text-md:   0.9375rem;  /* 15 callout */
+  --text-lg:   1.0625rem;  /* 17 bodyL */
+  --text-xl:   1.25rem;    /* 20 subheading（光学尺寸阈值）*/
+  --text-2xl:  1.5rem;     /* 24 heading */
+  --text-3xl:  2rem;       /* 32 title */
+  --text-4xl:  2.75rem;    /* 44 display */
+  --text-5xl:  2.75rem;    /* 44（封顶到 display）*/
+
+  /* — 阴影：扁平，静置无阴影，仅浮层有 — */
+  --shadow-none: none;
+  --shadow-xs:   none;
+  --shadow-sm:   none;
+  --shadow-md:   0 2px 8px rgba(20, 20, 20, 0.05);   /* dropdown */
+  --shadow-lg:   0 3px 12px rgba(20, 20, 20, 0.06);  /* popover/toast */
+  --shadow-xl:   0 12px 36px rgba(20, 20, 20, 0.10); /* modal */
+}
+
+/* =============================================================================
+   DARK THEME
+   ============================================================================= */
+.dark {
+  /* Surfaces — neutral dark grays */
+  --bg-canvas:        oklch(0.210 0 0);
+  --bg-surface:       oklch(0.245 0 0);
+  --bg-panel:         oklch(0.265 0 0);
+  --bg-elevated:      oklch(0.285 0 0);
+  --bg-sunken:        oklch(0.180 0 0);
+  --bg-overlay:       oklch(0.120 0 0 / 0.65);
+
+  --fill-subtle:      oklch(1 0 0 / 0.04);
+  --fill-muted:       oklch(1 0 0 / 0.07);
+  --fill-strong:      oklch(1 0 0 / 0.12);
+
+  /* Foreground */
+  --fg-default:       var(--paper-50);
+  --fg-muted:         oklch(0.770 0 0);
+  --fg-subtle:        oklch(0.620 0 0);
+  --fg-faint:         oklch(0.495 0 0);
+  --fg-on-accent:     var(--paper-50);
+  --fg-inverted:      var(--paper-900);
+
+  /* Borders */
+  --border-default:   oklch(1 0 0 / 0.08);
+  --border-strong:    oklch(1 0 0 / 0.16);
+  --border-focus:     #5C8BED;
+
+  /* Accent — v6.1 单蓝家族，暗色用稍亮一档避免发暗 */
+  --accent-default:   #5C8BED;   /* v6.1 hover blue reads well on dark */
+  --accent-hover:     #7BA3F0;
+  --accent-active:    #336EE8;
+  --accent-soft:      rgba(51, 110, 232, 0.22);
+  --accent-fg:        var(--paper-950);
+
+  /* Status — lifted for dark legibility */
+  --success-fg:       oklch(0.745 0.140 145);
+  --success-bg:       oklch(0.360 0.060 145 / 0.4);
+  --warning-fg:       oklch(0.810 0.130 75);
+  --warning-bg:       oklch(0.420 0.080 70 / 0.4);
+  --danger-fg:        oklch(0.720 0.165 28);
+  --danger-bg:        oklch(0.400 0.110 28 / 0.4);
+  --info-fg:          oklch(0.755 0.045 240);
+  --info-bg:          oklch(0.360 0.035 240 / 0.45);
+
+  /* Finance patch (v3) — darker yellow for editable cells in dark mode,
+     thresholds re-routed to the lifted dark-mode functional fg tokens */
+  --threshold-green:  var(--success-fg);
+  --threshold-amber:  var(--warning-fg);
+  --threshold-red:    var(--danger-fg);
+  --cell-input-bg:    oklch(0.330 0.045 95);
+  --cell-input-bg-hover: oklch(0.360 0.050 95);
+  --cell-input-border: oklch(0.470 0.070 90 / 0.5);
+  --cell-calc-bg:     var(--bg-canvas);
+  --cell-ref-bg:      var(--bg-panel);
+  --cell-locked-bg:   oklch(0.235 0 0);
+
+  --ring:             oklch(0.690 0.155 248 / 0.45);
+  --ring-offset:      var(--bg-canvas);
+
+  --shadow-xs:  0 1px 2px 0 oklch(0 0 0 / 0.30);
+  --shadow-sm:  0 1px 2px 0 oklch(0 0 0 / 0.35),
+                0 1px 3px 0 oklch(0 0 0 / 0.25);
+  --shadow-md:  0 2px 4px -1px oklch(0 0 0 / 0.40),
+                0 4px 8px -2px oklch(0 0 0 / 0.30);
+  --shadow-lg:  0 4px 8px -2px oklch(0 0 0 / 0.40),
+                0 10px 24px -4px oklch(0 0 0 / 0.45);
+  --shadow-xl:  0 8px 16px -4px oklch(0 0 0 / 0.45),
+                0 24px 48px -8px oklch(0 0 0 / 0.55);
+  --shadow-inset: inset 0 1px 0 0 oklch(1 0 0 / 0.05);
+
+  /* ===== Aham UI v6.1 暗色对齐覆盖（精确 hex，源自 aham-ui.css [data-theme=dark]）===== */
+  --bg-canvas:   #1C1C1C;   /* tier1 内容 */
+  --bg-surface:  #2A2A2A;   /* tier2 侧栏/顶栏 */
+  --bg-panel:    #2A2A2A;   /* tier2 卡片/面板 */
+  --bg-elevated: #2A2A2A;   /* 浮层在暗底上抬升一层 */
+  --bg-sunken:   #2A2A2A;
+  --bg-overlay:  rgba(0, 0, 0, 0.5);
+  --fill-subtle: rgba(255, 255, 255, 0.05);
+  --fill-muted:  rgba(255, 255, 255, 0.10);
+  --fill-strong: rgba(255, 255, 255, 0.16);
+  --fg-default:  #F5F5F5;
+  --fg-muted:    #A8A8A8;
+  --fg-subtle:   #767676;
+  --fg-faint:    #4A4A4A;
+  --fg-on-accent:#FFFFFF;
+  --fg-inverted: #1C1C1C;
+  --border-default: #3A3A3A;
+  --border-strong:  #4A4A4A;
+  --border-focus:   #5C8BED;
+  --accent-default: #5C8BED;
+  --accent-hover:   #7BA3F0;
+  --accent-active:  #336EE8;
+  --accent-soft:    #23304A;
+  --accent-fg:      #FFFFFF;
+  --steel-500: #5C8BED;  --steel-600: #336EE8;  --steel-100: #23304A;
+  --success-fg: #8FB096;  --success-bg: #23291F;
+  --warning-fg: #C2A855;  --warning-bg: #2A2616;
+  --danger-fg:  #D08070;  --danger-bg:  #2A1E1A;
+  --info-fg:    #A8A8A8;  --info-bg:    #2A2A2A;
+  --moss-500: #8FB096;  --amber-500: #C2A855;  --rust-500: #D08070;  --slate-500: #A8A8A8;
+  --threshold-green: #8FB096;  --threshold-amber: #C2A855;  --threshold-red: #D08070;
+  --ring: rgba(92, 139, 237, 0.32);
+  /* 暗色阴影：仅浮层有，黑色更重 */
+  --shadow-none: none;  --shadow-xs: none;  --shadow-sm: none;
+  --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.45);
+  --shadow-lg: 0 3px 12px rgba(0, 0, 0, 0.55);
+  --shadow-xl: 0 12px 36px rgba(0, 0, 0, 0.65);
+}
+
+/* Respect OS-level preference unless an explicit class wins */
+@media (prefers-color-scheme: dark) {
+  :root:not(.light) {
+    color-scheme: dark;
+  }
+}
+
+/* =============================================================================
+   BASE ELEMENT DEFAULTS
+   ============================================================================= */
+html { color-scheme: light dark; }
+.dark { color-scheme: dark; }
+
+body {
+  background: var(--bg-canvas);
+  color: var(--fg-default);
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  line-height: var(--leading-normal);
+  font-feature-settings: "ss01", "cv11";
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: var(--accent-soft);
+  color: var(--fg-default);
 }

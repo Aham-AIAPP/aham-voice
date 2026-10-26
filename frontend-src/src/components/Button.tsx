@@ -29,7 +29,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
         variant === "danger" && "btn--danger",
         size === "sm" && "btn--sm",
         size === "lg" && "btn--lg",
-        loading && "is-loading",
+        loading && "btn--loading",
         className,
       )}
       disabled={disabled || loading}

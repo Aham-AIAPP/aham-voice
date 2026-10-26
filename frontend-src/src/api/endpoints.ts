@@ -1,28 +1,29 @@
 import { api, getStoredToken } from "./client";
 import type {
-  DeleteRecordingResponse,
-  McpConfig,
-  Hotword,
-  HotwordStatus,
+  AdminOverview,
+  AuditRow,
   LlmTestResult,
   LoginResponse,
+  NameSpeakerResult,
   Recording,
   RecordingDetail,
-  SaveAllHotwordsResponse,
-  SpeakerCandidate,
-  ModelInfo,
-  ModelsStatus,
+  RoleMapping,
   Settings,
+  SpeakerCandidate,
+  SummaryRevisionDraft,
   SystemStatus,
+  Team,
   User,
   Voiceprint,
+  WecomConfig,
+  WecomSyncResult,
 } from "./types";
 
 // Thin one-call-per-export module. The TanStack Query hooks live alongside
 // pages so they can shape the data when needed, but the verbs themselves
 // are kept here so it's easy to grep for "which endpoints does the UI hit".
 
-// -------- auth (single-user desktop build: login is unused but kept harmless) --------
+// -------- auth --------
 
 export async function login(username: string, password: string): Promise<LoginResponse> {
   const { data } = await api.post<LoginResponse>("/auth/login", { username, password });
@@ -46,74 +47,13 @@ export async function fetchMe(): Promise<User> {
   return data;
 }
 
-// -------- settings (LLM / OpenAI-compatible API config) --------
-
-export async function fetchSettings(): Promise<Settings> {
-  const { data } = await api.get<Settings>("/settings");
-  return data;
-}
-
-export async function patchSettings(payload: Partial<{
-  // Generic LLM fields (preferred).
-  llm_api_key: string;
-  llm_api_base: string;
-  llm_model: string;
-  llm_provider: string;
-  // Legacy DeepSeek fields, still accepted by the backend for compatibility.
-  deepseek_api_key: string;
-  deepseek_api_base: string;
-  deepseek_model: string;
-}>): Promise<Settings> {
-  const { data } = await api.patch<Settings>("/settings", payload);
-  return data;
-}
-
-// Live-probe the LLM endpoint. With no payload the backend uses the stored
-// config; pass overrides to test values the user has typed but not yet saved.
-export async function testLlmConnection(payload?: {
-  api_key?: string;
-  api_base?: string;
-  model?: string;
-}): Promise<LlmTestResult> {
-  const { data } = await api.post<LlmTestResult>("/settings/test", payload ?? {});
-  return data;
-}
-
-export async function fetchMcpConfig(): Promise<McpConfig> {
-  const { data } = await api.get<McpConfig>("/mcp/config");
-  return data;
-}
-
-// -------- local models (first-run download manager) --------
-
-export async function fetchModels(refresh = false): Promise<ModelsStatus> {
-  const { data } = await api.get<ModelsStatus>("/models", { params: refresh ? { refresh: true } : {} });
-  return data;
-}
-
-export async function downloadModel(key: string): Promise<ModelInfo> {
-  const { data } = await api.post<ModelInfo>(`/models/${key}/download`);
-  return data;
-}
-
-export async function downloadAllModels(includeOptional: boolean): Promise<ModelsStatus> {
-  const { data } = await api.post<ModelsStatus>("/models/download", { include_optional: includeOptional });
-  return data;
-}
-
-export async function cancelModelDownload(key: string): Promise<ModelInfo> {
-  const { data } = await api.post<ModelInfo>(`/models/${key}/cancel`);
-  return data;
-}
-
-export async function deleteModel(key: string): Promise<ModelInfo> {
-  const { data } = await api.delete<ModelInfo>(`/models/${key}`);
-  return data;
-}
-
 // -------- recordings --------
 
-export async function fetchRecordings(params: { q?: string }): Promise<Recording[]> {
+export async function fetchRecordings(params: {
+  scope?: "mine" | "team";
+  q?: string;
+  meeting_type?: string;
+}): Promise<Recording[]> {
   const { data } = await api.get<Recording[]>("/recordings", { params });
   return data;
 }
@@ -123,23 +63,24 @@ export async function fetchRecording(id: string): Promise<RecordingDetail> {
   return data;
 }
 
-export async function deleteRecording(id: string): Promise<DeleteRecordingResponse> {
-  const { data } = await api.delete<DeleteRecordingResponse>(`/recordings/${id}`);
-  return data;
-}
-
 export async function uploadRecording(input: {
   file: File;
   title: string;
+  meeting_type?: string;
   tag?: string;
-  briefing?: string;
+  auto_process?: boolean;
+  expected_speakers?: number | null;
   onProgress?: (pct: number) => void;
 }): Promise<Recording> {
   const form = new FormData();
   form.append("file", input.file);
   form.append("title", input.title);
+  if (input.meeting_type) form.append("meeting_type", input.meeting_type);
   if (input.tag) form.append("tag", input.tag);
-  if (input.briefing) form.append("briefing", input.briefing);
+  form.append("auto_process", String(input.auto_process ?? true));
+  if (input.expected_speakers && input.expected_speakers >= 2) {
+    form.append("expected_speakers", String(input.expected_speakers));
+  }
   const { data } = await api.post<Recording>("/recordings", form, {
     onUploadProgress: (e) => {
       if (input.onProgress && e.total) {
@@ -155,18 +96,23 @@ export async function processRecording(id: string): Promise<{ recording_id: stri
   return data;
 }
 
-export async function transcribeRecording(id: string): Promise<{ recording_id: string; segments: number; speakers: number }> {
+export async function transcribeRecording(id: string): Promise<{ recording_id: string; job_id: string; status: string }> {
   const { data } = await api.post(`/recordings/${id}/transcribe`);
   return data;
 }
 
-export async function summarizeRecording(id: string): Promise<{ recording_id: string; model: string; summary_id: string; version: number }> {
+export async function summarizeRecording(id: string): Promise<{ recording_id: string; job_id: string; status: string }> {
   const { data } = await api.post(`/recordings/${id}/summarize`);
   return data;
 }
 
-export async function reviseSummary(id: string, instruction: string): Promise<{ recording_id: string; model: string; summary_id: string; version: number }> {
-  const { data } = await api.post(`/recordings/${id}/summary/revise`, { instruction });
+export async function previewSummaryRevision(id: string, instruction: string): Promise<SummaryRevisionDraft> {
+  const { data } = await api.post(`/recordings/${id}/summary/revise/preview`, { instruction });
+  return data;
+}
+
+export async function applySummaryRevision(id: string, draftId: string): Promise<{ recording_id: string; model: string; summary_id: string; version: number }> {
+  const { data } = await api.post(`/recordings/${id}/summary/revise/apply`, { draft_id: draftId });
   return data;
 }
 
@@ -180,11 +126,6 @@ export async function fetchSpeakerCandidates(id: string): Promise<SpeakerCandida
   return data;
 }
 
-export async function mergeSpeakers(recordingId: string, from: string, into: string): Promise<{ moved_segments: number; into: string }> {
-  const { data } = await api.post(`/recordings/${recordingId}/speakers/merge`, { from, into });
-  return data;
-}
-
 export async function renameSpeaker(recordingId: string, speaker: string, payload: {
   name: string;
   voiceprint_id?: string;
@@ -193,69 +134,43 @@ export async function renameSpeaker(recordingId: string, speaker: string, payloa
   return data;
 }
 
-// -------- hotwords (manual maintenance) --------
+// -------- hotwords（仅保留个人手填热词；表格版/在线更新已移除）--------
 
-export async function fetchHotwords(params: {
-  state?: string;
-  q?: string;
-  protected?: "0" | "1";
-}): Promise<Hotword[]> {
-  const { data } = await api.get<Hotword[]>("/hotwords", { params });
-  return data;
-}
-
-export async function fetchHotwordStatus(): Promise<HotwordStatus> {
-  const { data } = await api.get<HotwordStatus>("/hotwords/status");
-  return data;
-}
-
-// Personal-mode: load every hotword's `word` to populate the rich-text box.
-// Uses the dedicated, un-paginated /hotwords/words endpoint whose read range
-// (source='manual') matches exactly what `PUT /hotwords` replaces — so the box
-// round-trips losslessly and never drops words beyond the paginated 1000 cap.
+// 个人热词（对齐 aham-voice 富文本框）：读/写当前用户全部个人热词，无损 round-trip。
+// 注：热词「在线更新」（外部同步、重算评分、同步状态）功能已整体移除。
 export async function fetchAllHotwordWords(): Promise<string[]> {
   const { data } = await api.get<string[]>("/hotwords/words");
   return data;
 }
 
-// Personal-mode: full overwrite of the current user's manual hotwords. The
-// caller splits the 「、」-separated box into a trimmed array; the backend
-// validates, dedupes (case-insensitive), and returns the sorted persisted list.
-export async function saveAllHotwords(words: string[]): Promise<SaveAllHotwordsResponse> {
-  const { data } = await api.put<SaveAllHotwordsResponse>("/hotwords", { words });
+export async function saveAllHotwords(words: string[]): Promise<{ ok: boolean; count: number; words: string[] }> {
+  const { data } = await api.put("/hotwords", { words });
   return data;
 }
 
-export async function createHotword(payload: {
-  word: string;
-  kind?: string;
-  aliases?: string;
-  weight?: number;
-  protected?: boolean;
-}): Promise<Hotword> {
-  const { data } = await api.post<Hotword>("/hotwords", payload);
+// -------- settings (大模型配置) --------
+
+export async function fetchSettings(): Promise<Settings> {
+  const { data } = await api.get<Settings>("/settings");
   return data;
 }
 
-export async function patchHotword(id: string, payload: Partial<Pick<Hotword, "kind" | "aliases" | "scope" | "weight" | "active" | "state" | "protected">>): Promise<Hotword> {
-  const { data } = await api.patch<Hotword>(`/hotwords/${id}`, payload);
+export async function patchSettings(payload: {
+  llm_api_key?: string;
+  llm_api_base?: string;
+  llm_model?: string;
+  llm_provider?: string;
+}): Promise<Settings> {
+  const { data } = await api.patch<Settings>("/settings", payload);
   return data;
 }
 
-export async function deleteHotword(id: string): Promise<{ ok: boolean; id: string }> {
-  const { data } = await api.delete(`/hotwords/${id}`);
-  return data;
-}
-
-export async function maintainHotwords(): Promise<{ expired: number; rescored: number; status: HotwordStatus }> {
-  const { data } = await api.post("/hotwords/maintain");
-  return data;
-}
-
-export async function importHotwordsTxt(file: File): Promise<{ inserted: number; skipped: number; total: number }> {
-  const form = new FormData();
-  form.append("file", file);
-  const { data } = await api.post("/hotwords/import", form);
+export async function testLlmConnection(payload: {
+  api_key?: string;
+  api_base?: string;
+  model?: string;
+}): Promise<LlmTestResult> {
+  const { data } = await api.post<LlmTestResult>("/settings/test", payload);
   return data;
 }
 
@@ -266,57 +181,19 @@ export async function fetchVoiceprints(): Promise<Voiceprint[]> {
   return data;
 }
 
-export async function createVoiceprint(input: {
-  name: string;
-  threshold?: number;
-  file: File;
-}): Promise<Voiceprint> {
-  const form = new FormData();
-  form.append("name", input.name);
-  if (input.threshold != null) form.append("threshold", String(input.threshold));
-  form.append("file", input.file);
-  const { data } = await api.post<Voiceprint>("/voiceprints", form);
-  return data;
-}
-
-export interface NameSpeakerResult {
-  // null when downgraded (< 5s total speech: named only, no voiceprint built).
-  profile: Voiceprint | null;
-  downgraded: boolean;
-  sample_count: number;
-  sample_duration: number;
-  sample_duration_label: string;
-  updated_segments: number;
-}
-
-export async function createVoiceprintFromRecording(payload: {
-  recording_id: string;
-  speaker: string;
-  name?: string;
-  note?: string;
-  segment_ids?: string[];
-  profile_id?: string;
-  update_current_recording?: boolean;
-  threshold?: number;
-}): Promise<NameSpeakerResult> {
-  const { data } = await api.post<NameSpeakerResult>("/voiceprints/from-recording", payload);
-  return data;
-}
-
-// Name a speaker from a recording and build a voiceprint (with note). If the
-// speaker's total speaking time is < 5s the backend downgrades to name-only and
-// returns { downgraded: true, profile: null }.
+// 录音详情页「点名字直接命名」的薄封装（对齐 aham-voice）：只传姓名，一步完成
+// 回填当前录音 + 建跨录音声纹；发言 <5s 时后端降级为仅命名（downgraded=true）。
 export async function nameSpeakerFromRecording(payload: {
   recording_id: string;
   speaker: string;
   name: string;
-  note?: string;
-  segment_ids?: string[];
-  profile_id?: string;
   update_current_recording?: boolean;
-  threshold?: number;
 }): Promise<NameSpeakerResult> {
-  return createVoiceprintFromRecording(payload);
+  const { data } = await api.post<NameSpeakerResult>("/voiceprints/from-recording", {
+    update_current_recording: true,
+    ...payload,
+  });
+  return data;
 }
 
 export async function patchVoiceprint(id: string, payload: Partial<Pick<Voiceprint, "name" | "note" | "threshold" | "active">>): Promise<Voiceprint> {
@@ -325,11 +202,84 @@ export async function patchVoiceprint(id: string, payload: Partial<Pick<Voicepri
 }
 
 export async function deleteVoiceprint(id: string): Promise<{ ok: boolean; id: string }> {
-  const { data } = await api.delete<{ ok: boolean; id: string }>(`/voiceprints/${id}`);
+  const { data } = await api.delete(`/voiceprints/${id}`);
   return data;
 }
 
-// -------- system --------
+// -------- users & teams --------
+
+export async function fetchUsers(params: { role?: string; status?: string; q?: string }): Promise<User[]> {
+  const { data } = await api.get<User[]>("/users", { params });
+  return data;
+}
+
+export async function patchUser(id: string, payload: Partial<Pick<User, "username" | "name" | "email" | "mobile" | "dept" | "role" | "team_id" | "managed_team_ids" | "status">>): Promise<User> {
+  const { data } = await api.patch<User>(`/users/${id}`, payload);
+  return data;
+}
+
+export async function resetUserPassword(id: string): Promise<User> {
+  const { data } = await api.post<User>(`/users/${id}/reset-password`);
+  return data;
+}
+
+export async function fetchTeams(): Promise<Team[]> {
+  const { data } = await api.get<Team[]>("/teams");
+  return data;
+}
+
+export async function patchTeam(id: string, payload: Partial<Pick<Team, "name" | "dept" | "manager_ids">>): Promise<Team> {
+  const { data } = await api.patch<Team>(`/teams/${id}`, payload);
+  return data;
+}
+
+// -------- WeCom + role mappings --------
+
+export async function fetchWecomConfig(): Promise<WecomConfig> {
+  const { data } = await api.get<WecomConfig>("/wecom/config");
+  return data;
+}
+
+export async function patchWecomConfig(payload: Partial<{ corp_id: string; secret: string; sales_department_id: string }>): Promise<WecomConfig> {
+  const { data } = await api.patch<WecomConfig>("/wecom/config", payload);
+  return data;
+}
+
+export async function fetchRoleMappings(): Promise<RoleMapping[]> {
+  const { data } = await api.get<RoleMapping[]>("/wecom/role-mappings");
+  return data;
+}
+
+export async function createRoleMapping(payload: Omit<RoleMapping, "id" | "created_at" | "updated_at">): Promise<RoleMapping> {
+  const { data } = await api.post<RoleMapping>("/wecom/role-mappings", payload);
+  return data;
+}
+
+export async function patchRoleMapping(id: string, payload: Partial<RoleMapping>): Promise<RoleMapping> {
+  const { data } = await api.patch<RoleMapping>(`/wecom/role-mappings/${id}`, payload);
+  return data;
+}
+
+export async function deleteRoleMapping(id: string): Promise<void> {
+  await api.delete(`/wecom/role-mappings/${id}`);
+}
+
+export async function syncWecom(preview = false): Promise<WecomSyncResult> {
+  const { data } = await api.post<WecomSyncResult>("/wecom/sync", { preview });
+  return data;
+}
+
+// -------- audit / overview / system --------
+
+export async function fetchAuditRows(params: { category?: string; q?: string; from?: string; to?: string }): Promise<AuditRow[]> {
+  const { data } = await api.get<AuditRow[]>("/audit", { params });
+  return data;
+}
+
+export async function fetchAdminOverview(): Promise<AdminOverview> {
+  const { data } = await api.get<AdminOverview>("/admin/overview");
+  return data;
+}
 
 export async function fetchSystemStatus(): Promise<SystemStatus> {
   const { data } = await api.get<SystemStatus>("/system/status");
@@ -374,6 +324,16 @@ export function exportSummaryVersionUrl(id: string, summaryId: string): string {
 
 export function exportEmotionUrl(id: string): string {
   return withToken(`${apiPrefix()}/recordings/${id}/export/emotion.md`);
+}
+
+export function auditCsvUrl(params: { category?: string; q?: string; from?: string; to?: string }): string {
+  const search = new URLSearchParams();
+  if (params.category) search.set("category", params.category);
+  if (params.q) search.set("q", params.q);
+  if (params.from) search.set("from", params.from);
+  if (params.to) search.set("to", params.to);
+  const qs = search.toString();
+  return withToken(`${apiPrefix()}/audit.csv${qs ? `?${qs}` : ""}`);
 }
 
 export function segmentAudioUrl(recordingId: string, segmentId: string): string {

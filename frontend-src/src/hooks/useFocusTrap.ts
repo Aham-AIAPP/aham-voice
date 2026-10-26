@@ -1,17 +1,9 @@
 import { useCallback, useEffect, useRef } from "react";
 
 /**
- * Focus-trap hook for dialogs / modals.
- *
- * When `active` flips to true it:
- *   1. records the currently-focused element (the trigger),
- *   2. moves focus to the first interactive element inside the container
- *      (or the container itself if none),
- *   3. keeps Tab / Shift+Tab cycling within the container (first ↔ last),
- *   4. restores focus to the recorded trigger when `active` flips to false
- *      or the component unmounts.
- *
- * Usage:
+ * 弹窗 / 抽屉的焦点陷阱（对齐 aham-voice）。
+ * active 变 true 时：记录当前焦点元素 → 把焦点移入容器 → Tab/Shift+Tab 在容器内循环；
+ * active 变 false 或卸载时把焦点还给触发元素。
  *   const ref = useFocusTrap<HTMLDivElement>(open);
  *   return <div ref={ref} role="dialog" aria-modal="true">…</div>;
  */
@@ -19,7 +11,6 @@ export function useFocusTrap<T extends HTMLElement = HTMLElement>(active: boolea
   const containerRef = useRef<T | null>(null);
   const previousActiveRef = useRef<HTMLElement | null>(null);
 
-  // The set of focusable descendants, in DOM order, that are currently visible.
   const getFocusable = useCallback((): HTMLElement[] => {
     const root = containerRef.current;
     if (!root) return [];
@@ -35,8 +26,6 @@ export function useFocusTrap<T extends HTMLElement = HTMLElement>(active: boolea
       (el) =>
         !el.hasAttribute("disabled") &&
         el.getAttribute("aria-hidden") !== "true" &&
-        // offsetParent is null for display:none; allow position:fixed which has
-        // a null offsetParent too by also accepting non-zero client rects.
         (el.offsetParent !== null || el.getClientRects().length > 0),
     );
   }, []);
@@ -48,8 +37,6 @@ export function useFocusTrap<T extends HTMLElement = HTMLElement>(active: boolea
     previousActiveRef.current =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
 
-    // Move focus inside on open (skip if something inside already has focus,
-    // e.g. an autoFocus input).
     if (root && !root.contains(document.activeElement)) {
       const focusable = getFocusable();
       (focusable[0] ?? root).focus();
@@ -59,7 +46,6 @@ export function useFocusTrap<T extends HTMLElement = HTMLElement>(active: boolea
       if (e.key !== "Tab") return;
       const focusable = getFocusable();
       if (focusable.length === 0) {
-        // Nothing to tab to — keep focus on the container.
         e.preventDefault();
         root?.focus();
         return;
@@ -67,7 +53,6 @@ export function useFocusTrap<T extends HTMLElement = HTMLElement>(active: boolea
       const first = focusable[0];
       const last = focusable[focusable.length - 1];
       const activeEl = document.activeElement as HTMLElement | null;
-
       if (e.shiftKey) {
         if (activeEl === first || !root?.contains(activeEl)) {
           e.preventDefault();
@@ -82,7 +67,6 @@ export function useFocusTrap<T extends HTMLElement = HTMLElement>(active: boolea
     document.addEventListener("keydown", onKeyDown, true);
     return () => {
       document.removeEventListener("keydown", onKeyDown, true);
-      // Restore focus to the trigger that opened the trap.
       const prev = previousActiveRef.current;
       if (prev && document.contains(prev)) prev.focus();
     };

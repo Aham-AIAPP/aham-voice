@@ -1,0 +1,314 @@
+/* =============================================================================
+   Aham Design System · Conversation depth (v2.1)
+   -----------------------------------------------------------------------------
+   AI conversation patterns the v2 base didn't cover yet — attachments,
+   downloadable artifacts, quick choices, multi-step plans, voice input.
+
+     · .attachment-chip       file attached to outgoing message
+     · .msg-attachment        AI-generated downloadable artifact reference
+     · .quick-replies         AI-offered inline choice buttons
+     · .plan-block            visible multi-step reasoning / task plan
+     · .composer.is-recording voice-recording state on the composer
+   ============================================================================= */
+
+
+/* =============================================================================
+   ATTACHMENT-CHIP — file attached to an outgoing user message
+   -----------------------------------------------------------------------------
+   Sits in a row above the composer textarea before send; sits inline with
+   the .msg-user pill after send. One shape for both placements.
+
+   States:
+     default      uploaded, ready
+     .is-uploading  with progress fill
+     .has-error     red border + retry action
+   ============================================================================= */
+
+.attachment-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding-bottom: var(--space-2);
+}
+.msg-attachment:hover {
+  border-color: var(--border-strong);
+}
+.msg-attachment__type {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-subtle);
+  background: var(--bg-panel);
+  padding: 3px 6px;
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+}
+.msg-attachment__body { min-width: 0; }
+.msg-attachment__name {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--fg-default);
+  text-wrap: pretty;
+  margin: 0;
+  line-height: var(--leading-snug);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.msg-attachment__meta {
+  margin-top: 2px;
+  font-size: var(--text-xs);
+  color: var(--fg-subtle);
+}
+.msg-attachment__meta > span + span::before {
+  content: " · ";
+  color: var(--fg-faint);
+}
+.msg-attachment__actions {
+  display: flex;
+  gap: var(--space-1);
+  flex: none;
+}
+.msg-attachment__actions button {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  padding: 4px var(--space-2);
+  font: inherit;
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+.msg-attachment__actions button:hover {
+  background: var(--fill-subtle);
+  color: var(--fg-default);
+}
+
+
+/* =============================================================================
+   QUICK-REPLIES — AI-offered inline choice buttons
+   -----------------------------------------------------------------------------
+   Appears at the END of an .msg-assistant when the model is offering
+   choices instead of an open-ended question. Same shape as .starter-prompts
+   (plain text buttons, no chrome), but lives inside a message and disappears
+   once the user picks one.
+   ============================================================================= */
+
+.quick-replies {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px dashed var(--border-default);
+}
+
+
+/* =============================================================================
+   PLAN-BLOCK — visible multi-step reasoning / task plan
+   -----------------------------------------------------------------------------
+   When the model is doing multi-step work (multi-round bocha + LLM extract,
+   ASR → diarize → align → summarize), surface the plan so the user can see
+   "what's the AI doing" without a "Thinking…" lie.
+
+   States are per step (data-state). The block as a whole has no spinner.
+   ============================================================================= */
+
+.plan-block {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  font-size: var(--text-sm);
+  margin: var(--space-2) 0;
+  max-width: 64ch;
+}
+.plan-block > summary {
+  list-style: none;
+  cursor: pointer;
+  padding: var(--space-3) var(--space-4);
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  user-select: none;
+}
+.plan-block > summary::-webkit-details-marker { display: none; }
+.plan-block > summary::before {
+  content: "▸";
+  display: inline-block;
+  color: var(--fg-subtle);
+  transition: transform var(--duration-fast) var(--ease-standard);
+  flex: none;
+}
+.plan-block[open] > summary::before { transform: rotate(90deg); }
+
+@keyframes plan-active-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 var(--accent-soft); }
+  50%      { box-shadow: 0 0 0 4px var(--accent-soft); }
+}
+
+
+/* =============================================================================
+   COMPOSER · VOICE RECORDING STATE
+   -----------------------------------------------------------------------------
+   Modifies the existing .composer when the user holds the mic button.
+   Hides the textarea, shows a 3-line layout: pulsing recording dot + duration,
+   a row of subtle waveform bars, and cancel / finish actions.
+   ============================================================================= */
+
+.composer.is-recording {
+  border-color: var(--accent-default);
+}
+.composer.is-recording textarea { display: none; }
+.composer.is-recording .composer-recording { display: flex; }
+.composer.is-recording .composer-row,
+.composer.is-recording .composer-tools { display: none; }
+@keyframes rec-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.35; }
+}
+@keyframes rec-wave {
+  0%, 100% { height: 4px; }
+  50%      { height: 18px; }
+}
+
+
+/* =============================================================================
+   UPLOAD-ZONE — drag-and-drop file upload area (v2.2)
+   -----------------------------------------------------------------------------
+   The official entry point for any "drop a file here" flow: CSV import,
+   recording upload, business-card OCR, voiceprint registration. Hidden by
+   default in chat (the paperclip is enough); surfaced explicitly when a
+   page is *about* file ingestion.
+
+   States:
+     default                idle
+     .is-active             dragenter — accent border + soft fill
+     .is-uploading          files queued; .attachment-chip is-uploading rows below
+     .has-error             validation failed (wrong type / too large)
+   ============================================================================= */
+
+.upload-zone {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.upload-zone__drop {
+  position: relative;
+  display: grid;
+  place-items: center;
+  padding: var(--space-10) var(--space-6);
+  background: var(--bg-canvas);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-lg);
+  text-align: center;
+  cursor: pointer;
+  transition:
+    border-color var(--duration-fast) var(--ease-standard),
+    background   var(--duration-fast) var(--ease-standard);
+  min-height: 160px;
+}
+.upload-zone__drop:hover {
+  border-color: var(--fg-muted);
+  background: var(--fill-subtle);
+}
+.upload-zone.is-active .upload-zone__drop {
+  border-style: solid;
+  border-color: var(--accent-default);
+  background: var(--accent-soft);
+}
+.upload-zone.has-error .upload-zone__drop {
+  border-color: var(--danger-fg);
+}
+
+.upload-zone__primary {
+  font-size: var(--text-base);
+  color: var(--fg-default);
+  font-weight: var(--weight-medium);
+  margin: 0;
+  text-wrap: balance;
+}
+.upload-zone__browse {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  font-weight: var(--weight-medium);
+  color: var(--accent-default);
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: var(--accent-default);
+  text-underline-offset: 3px;
+}
+.upload-zone__browse:hover { text-decoration-thickness: 2px; }
+
+.upload-zone__hint {
+  margin: var(--space-2) 0 0;
+  font-size: var(--text-xs);
+  color: var(--fg-subtle);
+  line-height: var(--leading-relaxed);
+  text-wrap: pretty;
+}
+.upload-zone__hint .accept {
+  font-family: var(--font-mono);
+  color: var(--fg-muted);
+}
+
+/* Compact variant — for use inside a form section, smaller padding */
+.upload-zone--compact .upload-zone__drop {
+  min-height: 96px;
+  padding: var(--space-5) var(--space-4);
+}
+
+/* Hidden native file input, paired with the drop zone via label */
+.upload-zone__input {
+  position: absolute;
+  width: 1px; height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Diagnostic — uses the .diag pattern. The upload-zone just provides spacing
+   below the drop area for it to live in. */
+
+
+/* =============================================================================
+   TRANSCRIPT — speaker-attributed transcript view (v2.2)
+   -----------------------------------------------------------------------------
+   The viewer for recording → ASR → diarized transcript. Distinct from
+   .preview-doc (which is for documents) and from .msg-assistant (which is
+   chat prose). Carries a minimal audio player up top and per-line speaker /
+   timestamp / text rows below, with the current playback line highlighted.
+   ============================================================================= */
+
+.transcript {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  background: var(--bg-canvas);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  max-width: 72ch;
+}
+
+/* --- audio player — minimal: play, progress, time --- */
+.transcript__player {
+  display: grid;
+  grid-template-columns: 32px auto 1fr auto;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 0 var(--space-5) var(--space-4);
+  border-bottom: 1px solid var(--border-default);
+}
+
+/* Per-line actions — reveal on row hover, mirror .data-table .row-actions */
+.transcript__actions {
+  display: inline-flex;
+  gap: var(--space-1);
+  opacity: 0;
+  transition: opacity var(--duration-fast) var(--ease-standard);
+}

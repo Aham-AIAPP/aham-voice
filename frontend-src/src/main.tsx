@@ -6,6 +6,11 @@ import { router } from "./router";
 import { AuthProvider } from "./context/auth";
 import "./styles/index.css";
 
+try {
+  const savedTheme = localStorage.getItem("voice.theme");
+  document.documentElement.classList.toggle("dark", savedTheme ? savedTheme === "dark" : window.matchMedia("(prefers-color-scheme: dark)").matches);
+} catch { /* Render normally if browser storage is unavailable. */ }
+
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
@@ -19,7 +24,7 @@ const queryClient = new QueryClient({
 // Keyframe consumed by the small inline Spinner. Lives here so the spinner
 // itself stays styleless.
 const styleEl = document.createElement("style");
-styleEl.textContent = `@keyframes ahamvoice-spin { to { transform: rotate(360deg); } }`;
+styleEl.textContent = `@keyframes newvoice-spin { to { transform: rotate(360deg); } }`;
 document.head.appendChild(styleEl);
 
 createRoot(document.getElementById("root")!).render(
