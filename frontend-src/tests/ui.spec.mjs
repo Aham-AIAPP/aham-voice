@@ -10,6 +10,7 @@ test('筛选、分组与返回保留条件；请求使用原有认证', async ({
   await expect(page.locator('.recordings-row')).toHaveCount(1);
   await page.getByRole('link',{name:'项目会议 1',exact:true}).click();
   await expect(page.getByRole('heading',{name:'项目会议 1',exact:true})).toBeVisible();
+  await page.getByRole('navigation',{name:'内容导航'}).getByRole('link',{name:'逐字稿',exact:true}).click();
   await page.getByRole('link',{name:'返回录音库',exact:true}).click();
   await expect(page.getByLabel('处理状态',{exact:true})).toHaveValue('failed');
   await page.getByRole('button',{name:'清除筛选',exact:true}).click();
@@ -33,6 +34,7 @@ test('当前正文、历史版本、真实文件下载和时间戳播放', async
   expect(await fs.readFile(await download.path(),'utf8')).toContain('第一版内容');
   await expect(page.getByRole('link',{name:'导出纪要 v1',exact:true})).toHaveAttribute('href','/api/recordings/rec-0/export/summaries/summary-1.md?token=fixture-token');
   await page.getByRole('button',{name:'返回当前版本'}).click();
+  await page.getByRole('navigation',{name:'内容导航'}).getByRole('link',{name:'逐字稿',exact:true}).click();
   await page.getByRole('button',{name:'播放 00:01 的发言'}).click();
   await expect.poll(()=>page.locator('.record-audio audio').evaluate(el=>el.currentTime)).toBeGreaterThanOrEqual(1);
   expect(f.unexpected).toEqual([]);expect(f.errors).toEqual([]);
@@ -89,6 +91,9 @@ test('未生成内容的阶段隐藏；来源链接和快捷键帮助可用', as
   await page.goto('/app/recordings/rec-0');
   await page.locator('#record-summary > .record-source').getByRole('link',{name:'查看逐字稿依据'}).click();
   await expect(page).toHaveURL(/#record-transcript$/);
+  await expect(page.locator('#record-transcript')).toBeVisible();
+  await expect(page.locator('#record-summary')).not.toBeVisible();
+  await page.getByRole('navigation',{name:'内容导航'}).getByRole('link',{name:'会议纪要',exact:true}).click();
   await page.locator('.record-revise > summary').click();
   await page.getByLabel('纪要修改要求').fill('?');
   await expect(page.getByRole('dialog',{name:'键盘快捷键'})).not.toBeVisible();
@@ -169,8 +174,8 @@ test('说话人命名保持长片段建声纹和短片段仅命名的契约', as
 test('情绪分析和历史抽屉保留，Esc 恢复焦点', async ({page}) => {
   const f=await setup(page);
   await page.goto('/app/recordings/rec-0');
+  await page.getByRole('navigation',{name:'内容导航'}).getByRole('link',{name:'情绪分析',exact:true}).click();
   await page.getByRole('button',{name:'生成情绪分析',exact:true}).click();
-  await page.locator('#record-emotion summary').click();
   await expect(page.getByText('交流平稳。')).toBeVisible();
   await page.locator('.record-history > summary').click();
   const trigger=page.locator('.record-history').getByRole('button').filter({hasText:'会议纪要 v1'});
@@ -254,7 +259,7 @@ for (const width of [1440,390]) test('长逐字稿的定位、播放与固定控
   await page.goto('/app/recordings/rec-0');
   await expect(page.locator('.nav-item[href="/app/recordings"]')).toHaveClass(/is-active/);
   await page.getByRole('navigation',{name:'内容导航'}).getByRole('link',{name:'逐字稿',exact:true}).click();
-  await expect.poll(()=>page.locator('#record-transcript').evaluate(el=>el.getBoundingClientRect().top)).toBeLessThan(220);
+  await expect.poll(()=>page.locator('#record-transcript').evaluate(el=>el.getBoundingClientRect().top)).toBeLessThan(width < 640 ? 290 : 250);
   const positions=await page.evaluate(()=>({section:document.querySelector('#record-transcript').getBoundingClientRect().top,tools:document.querySelector('.record-reading-tools').getBoundingClientRect().bottom}));
   expect(positions.section).toBeGreaterThanOrEqual(positions.tools);
   await page.getByRole('button',{name:'播放 00:01 的发言',exact:true}).click();
@@ -266,7 +271,7 @@ for (const width of [1440,390]) test('长逐字稿的定位、播放与固定控
   await page.locator('#main').evaluate(el=>{el.scrollTop += 800;});
   await expect.poll(()=>page.locator('.record-reading-tools').evaluate(el=>el.getBoundingClientRect().top)).toBe(44);
   await page.getByRole('navigation',{name:'内容导航'}).getByRole('link',{name:'会议纪要',exact:true}).click();
-  await expect.poll(()=>page.locator('#record-summary').evaluate(el=>el.getBoundingClientRect().top)).toBeLessThan(220);
+  await expect.poll(()=>page.locator('#record-summary').evaluate(el=>el.getBoundingClientRect().top)).toBeLessThan(width < 640 ? 290 : 250);
   expect(await page.locator('#main').evaluate(el=>el.scrollWidth<=el.clientWidth+1)).toBe(true);
   await page.screenshot({path:testInfo.outputPath('reading-tools.png'),animations:'disabled'});
   expect(f.unexpected).toEqual([]); expect(f.errors).toEqual([]);
@@ -341,3 +346,36 @@ for (const width of [1440, 390]) for (const theme of ['light', 'dark']) {
     await page.screenshot({path:testInfo.outputPath('revision-preview.png'),fullPage:true,animations:'disabled'});
   });
 }
+
+test('转写导出在纪要首屏可见，下载完整正文与时间戳，切换后仍可下载', async ({page}) => {
+  const f=await setup(page,{richContent:true});
+  await page.goto('/app/recordings/rec-0');
+  const button=page.getByRole('link',{name:'导出转写',exact:true});
+  await expect(button).toBeInViewport();
+  await expect(page.locator('#record-summary')).toBeVisible();
+  await expect(page.locator('#record-transcript')).toBeHidden();
+  const pending=page.waitForEvent('download');
+  await button.click();
+  const download=await pending;
+  expect(await download.failure()).toBeNull();
+  const text=await fs.readFile(await download.path(),'utf8');
+  for(const value of ['00:00','林悦','第一轮试用先确认需求。','00:01','需要保留现有功能。']) expect(text).toContain(value);
+  await page.getByRole('navigation',{name:'内容导航'}).getByRole('link',{name:'逐字稿',exact:true}).click();
+  await expect(page.locator('#record-summary')).toBeHidden();
+  await expect(page.locator('#record-transcript')).toBeVisible();
+  await expect(button).toBeInViewport();
+  await page.reload();
+  await expect(page.locator('#record-transcript')).toBeVisible();
+  await expect(page.getByRole('navigation',{name:'内容导航'}).getByRole('link',{name:'逐字稿',exact:true})).toHaveAttribute('aria-current','page');
+  expect(f.unexpected).toEqual([]);expect(f.errors).toEqual([]);
+});
+
+test('纪要尚未生成时直接阅读并导出转写，空录音不显示导出', async ({page}) => {
+  await setup(page,{noSummary:true});
+  await page.goto('/app/recordings/rec-1');
+  await expect(page.locator('#record-transcript')).toBeVisible();
+  await expect(page.getByRole('link',{name:'导出转写',exact:true})).toBeInViewport();
+  await expect(page.getByRole('button',{name:'重试纪要',exact:true})).toBeVisible();
+  await page.goto('/app/recordings/rec-3');
+  await expect(page.getByRole('link',{name:'导出转写',exact:true})).toHaveCount(0);
+});

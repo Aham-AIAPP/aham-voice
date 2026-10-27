@@ -1,0 +1,89 @@
+/* Reading surface for real, often lengthy transcripts and meeting notes. */
+.record-heading { padding-bottom: var(--wb-s5); }
+.record-title-row { gap: var(--wb-s5); margin-block: var(--wb-s3) var(--wb-s4); }
+.record-title-row h1 { line-height: 1.5; }
+.record-next { margin-top: var(--wb-s3); font-size: var(--wb-text-xs); color: var(--wb-muted); }
+.record-layout { border-top: 1px solid var(--wb-line); }
+.record-content { padding: 0 var(--wb-s5) var(--wb-s6); background: color-mix(in srgb, var(--wb-fill) 65%, var(--wb-bg)); scroll-margin-top: 0; }
+.record-reading-tools { padding: var(--wb-s4) 0 0; margin-bottom: var(--wb-s5); background: color-mix(in srgb, var(--wb-fill) 65%, var(--wb-bg)); border-bottom: 1px solid var(--wb-line); }
+.record-audio { margin: 0 0 var(--wb-s3); }
+.record-audio audio { width: 100%; }
+.record-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; column-gap: var(--wb-s4); row-gap: var(--wb-s2); padding-bottom: var(--wb-s3); }
+.record-anchors { border: 0; gap: var(--wb-s1); flex-wrap: nowrap; font-size: var(--wb-body); }
+.record-anchors a { min-height: var(--wb-row); padding: var(--wb-s2) var(--wb-s3); gap: var(--wb-s2); border-radius: var(--wb-radius); white-space: nowrap; }
+.record-anchors a:hover { background: var(--wb-hover); text-decoration: none; }
+.record-anchors a[aria-current="page"] { background: var(--wb-bg); color: var(--wb-action); box-shadow: 0 1px 3px color-mix(in srgb, var(--wb-ink) 8%, transparent); font-weight: 600; }
+.record-export-actions { display: flex; flex-wrap: wrap; gap: var(--wb-s2); }
+.record-export-actions .btn { min-height: var(--wb-row); white-space: nowrap; gap: var(--wb-s2); }
+.record-export-actions .btn > svg { display: block; width: var(--wb-icon); height: var(--wb-icon); }
+.record-export-actions .btn--secondary { background: var(--wb-bg); border: 1px solid var(--wb-line); }
+.record-export-actions .btn--secondary:hover { background: var(--wb-button-hover); }
+.record-section { width: 100%; max-width: 1120px; margin: 0 auto var(--wb-s5); padding: var(--wb-s6); border: 1px solid var(--wb-line); border-radius: var(--wb-radius-lg); background: var(--wb-bg); }
+.record-section[hidden] { display: none; }
+.record-section-head { margin-bottom: var(--wb-s3); min-height: var(--wb-row); }
+.record-section-head h2 { font-size: var(--wb-title); font-weight: 600; letter-spacing: -.02em; }
+.record-section-count { font-size: var(--wb-text-xs); color: var(--wb-muted); }
+.record-source { gap: var(--wb-s2); line-height: 1.8; padding-bottom: var(--wb-s5); margin-bottom: var(--wb-s5); border-bottom: 1px solid var(--wb-line-soft); }
+.record-source a { color: var(--wb-ink-2); text-underline-offset: 3px; }
+.record-prose { max-width: none; width: 100%; font-size: 15px; line-height: 1.9; color: var(--wb-ink-2); }
+.record-prose :is(h1,h2,h3,h4) { color: var(--wb-ink); font-weight: 600; line-height: 1.6; margin-block: var(--wb-s6) var(--wb-s3); }
+.record-prose h1 { font-size: var(--wb-title); }
+.record-prose h2 { font-size: 18px; padding-bottom: var(--wb-s2); border-bottom: 1px solid var(--wb-line-soft); }
+.record-prose h3 { font-size: var(--wb-touch-input); }
+.record-prose h4 { font-size: 15px; }
+.record-prose :is(p,li,ul,ol) { font-size: inherit; line-height: 1.9; }
+.record-prose p { margin-block: var(--wb-s3); }
+.record-prose li { margin-block: var(--wb-s2); padding-left: var(--wb-s1); }
+.record-prose strong { color: var(--wb-ink); font-weight: 600; }
+.record-prose blockquote { border-left: 3px solid var(--wb-action); background: var(--wb-fill); padding: var(--wb-s3) var(--wb-s4); border-radius: 0 var(--wb-radius) var(--wb-radius) 0; }
+.record-prose table { font-size: var(--wb-text-base); }
+.record-prose th, .record-prose td { font-size: var(--wb-text-base); padding: var(--wb-s3) var(--wb-s4); line-height: 1.7; }
+.record-transcript { max-width: none; }
+.transcript-hint { margin: 0 0 var(--wb-s5); padding-bottom: var(--wb-s4); border-bottom: 1px solid var(--wb-line-soft); }
+.record-transcript li { display: grid; grid-template-columns: 76px minmax(0,1fr); gap: var(--wb-s4); border: 0; border-radius: var(--wb-radius); margin: 0; padding: var(--wb-s4) var(--wb-s2); }
+.record-transcript li + li { border-top: 1px solid var(--wb-line-soft); }
+.record-transcript li[aria-current="true"] { background: var(--wb-blue-bg); }
+.transcript-body { min-width: 0; }
+.transcript-meta { color: var(--wb-ink); font-weight: 500; gap: var(--wb-s2); min-height: var(--wb-control); flex-wrap: wrap; }
+.transcript-speaker-mark { display: inline-flex; align-items: center; justify-content: center; width: var(--wb-avatar); height: var(--wb-avatar); border-radius: var(--wb-radius-pill); background: var(--wb-blue-bg); color: var(--wb-blue); font-size: var(--wb-text-xs); }
+.transcript-speaker-mark[data-color="1"] { color: var(--wb-success); background: var(--wb-success-bg); }
+.transcript-speaker-mark[data-color="2"] { color: var(--wb-warning); background: var(--wb-warning-bg); }
+.transcript-speaker-mark[data-color="3"] { color: var(--wb-info); background: var(--wb-info-bg); }
+.transcript-playing { color: var(--wb-blue); font-size: var(--wb-text-xs); font-weight: 400; margin-left: auto; }
+.transcript-time { align-self: start; background: transparent; color: var(--wb-muted); padding-inline: var(--wb-s1); min-height: var(--wb-control); }
+.record-transcript p { font-size: 15px; color: var(--wb-ink-2); line-height: 1.9; margin-top: var(--wb-s2); }
+.record-properties { background: var(--wb-bg); padding-top: var(--wb-s5); }
+.record-properties > h2 { font-weight: 600; }
+.record-history { max-width: 1120px; margin: 0 auto; }
+.record-history > summary { color: var(--wb-muted); }
+.record-revise { margin-top: var(--wb-s6); }
+@media (max-width: 1280px) {
+  .record-toolbar { align-items: stretch; }
+  .record-section { padding: var(--wb-s5); }
+  .record-anchors a { padding-inline: var(--wb-s2); }
+}
+@media (max-width: 640px) {
+  .record-heading { padding: var(--wb-s4); }
+  .record-title-row h1 { font-size: 18px; }
+  .record-content { padding-inline: var(--wb-s3); }
+  .record-reading-tools { padding-top: var(--wb-s2); margin-bottom: var(--wb-s3); }
+  .record-audio { margin-bottom: var(--wb-s2); }
+  .record-toolbar { gap: var(--wb-s2); padding-bottom: var(--wb-s2); }
+  .record-anchors { width: 100%; justify-content: space-between; }
+  .record-anchors a { flex: 1; justify-content: center; gap: var(--wb-s1); padding-inline: var(--wb-s1); }
+  .record-anchors svg { display: none; }
+  .record-export-actions { width: 100%; }
+  .record-export-actions .btn { flex: 1; min-height: var(--wb-touch); }
+  .record-section { padding: var(--wb-s4); border-radius: var(--wb-radius); }
+  .record-section-head h2 { font-size: 18px; }
+  .record-section-head select { min-height: var(--wb-touch); }
+  .record-source { padding-bottom: var(--wb-s4); margin-bottom: var(--wb-s4); }
+  .record-prose { font-size: var(--wb-text-base); }
+  .record-prose h2 { font-size: var(--wb-touch-input); }
+  .record-transcript li { grid-template-columns: minmax(0,1fr) auto; gap: var(--wb-s1) var(--wb-s2); padding: var(--wb-s4) 0; }
+  .transcript-body { display: contents; }
+  .transcript-meta { grid-column: 1; grid-row: 1; }
+  .transcript-body > p { grid-column: 1 / -1; }
+  .transcript-time { grid-column: 2; grid-row: 1; justify-self: end; min-height: var(--wb-touch); background: var(--wb-fill); padding-inline: var(--wb-s2); }
+  .record-transcript p { font-size: var(--wb-text-base); }
+}

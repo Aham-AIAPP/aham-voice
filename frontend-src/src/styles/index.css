@@ -30,6 +30,7 @@
 @import "./utilities.css";
 @import "./aham/tokens.css";
 @import "./aham-adapter.css";
+@import "./recording-detail.css";
 
 /* App-shell viewport: the body holds the grid, full height, no scroll on the
    root — the body region inside .app-shell handles its own scrolling. */
