@@ -31,7 +31,7 @@ function RecordingContent({ recordingId }: { recordingId: string }) {
   const from = location.state?.backTo;
   const backTo = typeof from === 'string' && (from === '/app/recordings' || from.startsWith('/app/recordings?')) ? from : '/app/recordings';
   const audioRef = useRef<HTMLAudioElement>(null);
-  const readerRef = useRef<HTMLDivElement>(null);
+  const pageRef = useRef<HTMLDivElement>(null);
   const [mediaError, setMediaError] = useState('');
   const [isPlaying, setIsPlaying] = useState(false);
   const [activeSegmentId, setActiveSegmentId] = useState<string | null>(null);
@@ -51,7 +51,9 @@ function RecordingContent({ recordingId }: { recordingId: string }) {
   });
   useEffect(() => {
     if (!location.hash || detail.isLoading) return;
-    const frame = requestAnimationFrame(() => readerRef.current?.scrollIntoView({ block: 'start' }));
+    // Every tab starts at the same page header. Scrolling to the reader instead
+    // clamps differently for short panels and used to hide the title on long ones.
+    const frame = requestAnimationFrame(() => pageRef.current?.scrollIntoView({ block: 'start', behavior: 'instant' }));
     return () => cancelAnimationFrame(frame);
   }, [location.hash, location.key, detail.isLoading]);
 
@@ -99,7 +101,7 @@ function RecordingContent({ recordingId }: { recordingId: string }) {
     : summaryMissing ? '纪要状态已完成，但正文为空。需要重新生成纪要。'
     : hasSummary ? '纪要已生成，等待你核对；可对照逐字稿、修改或导出。'
     : rec.asr_status === 'done' ? '转写已完成，可以生成会议纪要。' : '录音已保存，可以开始转写和生成纪要。';
-  const availableViews = [showSummary && 'summary', segments.length > 0 && 'transcript', showEmotion && 'emotion'].filter(Boolean);
+  const availableViews = [showSummary && 'summary', segments.length > 0 && 'transcript', showEmotion && 'emotion', 'timeline'].filter(Boolean);
   const requestedView = location.hash.replace('#record-', '');
   const activeView = availableViews.includes(requestedView) ? requestedView : availableViews[0];
   const viewLink = (view: string) => ({ pathname: location.pathname, search: location.search, hash: '#record-' + view });
@@ -123,7 +125,7 @@ function RecordingContent({ recordingId }: { recordingId: string }) {
     } catch { setMediaError('音频尚未就绪，加载后再定位。'); }
   }
 
-  return <div className="record-page">
+  return <div className="record-page" ref={pageRef}>
     <div className="record-heading">
       <Link to={backTo} className="record-back">返回录音库</Link>
       <div className="record-title-row">
@@ -139,7 +141,7 @@ function RecordingContent({ recordingId }: { recordingId: string }) {
       {action.isError && <Diag code="REC_E_ACTION">{readApiError(action.error)}</Diag>}
     </div>
     <div className="record-layout">
-      <div className="record-content" ref={readerRef}>
+      <div className="record-content">
         <div className="record-reading-tools">
           <section className="record-audio" aria-label="录音播放">
             <audio ref={audioRef} controls preload="metadata" src={recordingAudioUrl(recordingId)} onError={() => setMediaError('音频加载失败，可刷新页面重试。')} onPlaying={() => { setMediaError(''); setIsPlaying(true); }} onPause={() => setIsPlaying(false)} onEnded={() => setIsPlaying(false)} onTimeUpdate={e => updatePlaybackPosition(e.currentTarget.currentTime)} onSeeked={e => updatePlaybackPosition(e.currentTarget.currentTime)} />
@@ -150,6 +152,7 @@ function RecordingContent({ recordingId }: { recordingId: string }) {
               {showSummary && <Link to={viewLink('summary')} state={location.state} replace preventScrollReset aria-current={activeView === 'summary' ? 'page' : undefined}><Icon name="file-text" />会议纪要</Link>}
               {segments.length > 0 && <Link to={viewLink('transcript')} state={location.state} replace preventScrollReset aria-current={activeView === 'transcript' ? 'page' : undefined}><Icon name="text-align-start" />逐字稿</Link>}
               {showEmotion && <Link to={viewLink('emotion')} state={location.state} replace preventScrollReset aria-current={activeView === 'emotion' ? 'page' : undefined}><Icon name="chart-no-axes-combined" />情绪分析</Link>}
+              <Link to={viewLink('timeline')} state={location.state} replace preventScrollReset aria-current={activeView === 'timeline' ? 'page' : undefined}><Icon name="history" />时间线</Link>
             </nav>
             <div className="record-export-actions" aria-label="导出文件">
               {segments.length > 0 && <a className="btn btn--secondary" href={exportTranscriptUrl(recordingId)} download title="导出完整逐字稿，包含说话人与时间戳（Markdown）"><Icon name="download" />导出转写</a>}
@@ -173,7 +176,7 @@ function RecordingContent({ recordingId }: { recordingId: string }) {
         </section>}
         {segments.length > 0 && <section id="record-transcript" className="record-section" hidden={activeView !== 'transcript'}>
           <header className="record-section-head"><h2>录音转写</h2><span className="record-section-count">{segments.length} 段发言 · {uniqueSpeakers} 位说话人</span></header>
-          <p className="record-muted transcript-hint">点击时间，定位并播放对应发言。</p>
+          <p className="record-source">点击时间，定位并播放对应发言。</p>
           {segments.length ? <ol className="record-transcript">{segments.map(seg => <li key={seg.id} aria-current={activeSegmentId === seg.id ? 'true' : undefined}>
             <button className="transcript-time tnum" onClick={() => seek(seg.start_sec)} aria-label={'播放 ' + seg.start_label + ' 的发言'}>{seg.start_label}</button>
             <div className="transcript-body">
@@ -183,19 +186,21 @@ function RecordingContent({ recordingId }: { recordingId: string }) {
           </li>)}</ol> : <p className="record-muted">{processing ? '转写进行中，完成后自动显示。' : '还没有逐字稿。'}</p>}
         </section>}
         {showEmotion && <section id="record-emotion" className="record-section" hidden={activeView !== 'emotion'}>
-          <header className="record-section-head"><h2>对话情绪分析</h2>{emotion?.content?.trim() && <span className="record-section-count">v{emotion.version}</span>}</header>
-          {emotion?.content?.trim() ? <div className="record-analysis"><p className="record-source">AI 生成 · {emotion.model} · <Link to={viewLink('transcript')} state={location.state} replace preventScrollReset>查看逐字稿依据</Link></p><article className="markdown record-prose"><ReactMarkdown remarkPlugins={[remarkGfm]}>{emotion.content}</ReactMarkdown></article></div> : <>
-            <p className="record-muted">按需分析说话情绪、客户意向与异议。</p>
+          <header className="record-section-head"><h2>情绪分析</h2>{emotion?.content?.trim() && <span className="record-section-count">v{emotion.version}</span>}</header>
+          <p className="record-source">{emotion?.content?.trim() ? <>AI 生成 · {emotion.model} · {emotion.created_at} · <Link to={viewLink('transcript')} state={location.state} replace preventScrollReset>查看逐字稿依据</Link></> : '按需分析说话情绪、客户意向与异议。'}</p>
+          {emotion?.content?.trim() ? <article className="markdown record-prose"><ReactMarkdown remarkPlugins={[remarkGfm]}>{emotion.content}</ReactMarkdown></article> : <>
             <Button variant="secondary" disabled={rec.asr_status !== 'done' || pipelineBusy || emotionRunning} loading={emotionMut.isPending} onClick={() => emotionMut.mutate()}>{emotionRunning ? '正在分析' : '生成情绪分析'}</Button>
           </>}
           {emotionMut.isError && <Diag code="REC_E_EMOTION">{readApiError(emotionMut.error)}</Diag>}
         </section>}
-        <details className="record-fold record-history"><summary>处理与修改记录 <span>{tasks.length} 个任务 · {summaries.length} 个纪要版本 · {rec.owner_name} · {rec.updated_at}</span></summary>
+        <section id="record-timeline" className="record-section record-history" hidden={activeView !== 'timeline'}>
+          <header className="record-section-head"><h2>处理时间线</h2><span className="record-section-count">{tasks.length} 个任务 · {summaries.length} 个纪要版本</span></header>
+          <p className="record-source">处理与修改记录 · {rec.owner_name} · 更新于 {rec.updated_at}</p>
           <Timeline recording={rec} tasks={tasks} summaries={summaries} segments={segments} emotion={emotion}
             onPreviewSummary={summaryId => setPreviewKey('summary:' + summaryId)}
             onPreviewTranscript={() => setPreviewKey(TRANSCRIPT_KEY)} onPreviewEmotion={() => setPreviewKey(EMOTION_KEY)}
             onGenerateEmotion={() => emotionMut.mutate()} emotionPending={emotionMut.isPending || emotionRunning || pipelineBusy} activePreviewKey={previewKey} />
-        </details>
+        </section>
       </div>
       <aside className="record-properties" aria-label="录音属性">
         <h2>录音属性</h2>

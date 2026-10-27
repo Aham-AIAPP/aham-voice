@@ -15,6 +15,7 @@ export async function setup(page, options = {}) {
     { id: 'summary-2', recording_id: 'rec-0', version: 2, content: state.emptySummary ? '   ' : '# 会议纪要\n\n确认试用范围，保留原有数据与权限。', model: 'test-model', is_current: 1, created_at: '2026-10-26 09:10:00', instruction: null },
     { id: 'summary-1', recording_id: 'rec-0', version: 1, content: '# 历史纪要\n\n这是第一版内容。', model: 'test-model', is_current: 0, created_at: '2026-10-26 09:05:00', instruction: null },
   ];
+  if (state.longModel) summaries.forEach(s=>{s.model='deepseek-v4-flash-with-a-long-provider-identifier';});
   if (state.noSummary) summaries = [];
   if (state.richContent && summaries.length) summaries[0].content = '# 会议纪要\n\n确认试用范围，保留原有数据与权限。\n\n## 已确认事项\n\n- 先验证录音上传、逐字稿与会议纪要的完整流程。\n- 由林悦整理试用材料，陈言核对交付范围。\n- 现有账号权限和历史版本继续保留。\n\n## 行动安排\n\n| 事项 | 负责人 | 完成时间 |\n| --- | --- | --- |\n| 整理试用材料 | 林悦 | 2026-10-28 |\n| 核对交付范围 | 陈言 | 2026-10-30 |\n\n## 待确认\n\n试用后的验收时间由双方另行确认。纪要中的结论需结合逐字稿核对。';
   const segments = [
@@ -86,7 +87,7 @@ export async function setup(page, options = {}) {
       if (!rec) return json({detail:'录音不存在'},404);
       if (queuedReads && rec.id === 'rec-1') { queuedReads++; if(queuedReads > 2) rec.summary_status='done'; }
       const empty = rec.asr_status !== 'done';
-      return json({ recording:rec, segments:empty ? [] : segments, summary:empty ? null : summaries[0], summaries:empty ? [] : summaries, tasks:[], hotword_package:{asr_terms_count:2}, emotion_analysis:emotion, outputs:[] });
+      return json({ recording:rec, segments:empty ? [] : segments, summary:empty ? null : summaries[0], summaries:empty ? [] : summaries, tasks:state.tasks ?? [], hotword_package:{asr_terms_count:2}, emotion_analysis:emotion, outputs:[] });
     }
     if (pathname === '/api/hotwords/words') return json(words);
     if (pathname === '/api/hotwords' && method === 'PUT') { words=req.postDataJSON().words; return json({ok:true,count:words.length,words}); }

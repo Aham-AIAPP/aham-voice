@@ -39,7 +39,6 @@
 .record-prose table { font-size: var(--wb-text-base); }
 .record-prose th, .record-prose td { font-size: var(--wb-text-base); padding: var(--wb-s3) var(--wb-s4); line-height: 1.7; }
 .record-transcript { max-width: none; }
-.transcript-hint { margin: 0 0 var(--wb-s5); padding-bottom: var(--wb-s4); border-bottom: 1px solid var(--wb-line-soft); }
 .record-transcript li { display: grid; grid-template-columns: 76px minmax(0,1fr); gap: var(--wb-s4); border: 0; border-radius: var(--wb-radius); margin: 0; padding: var(--wb-s4) var(--wb-s2); }
 .record-transcript li + li { border-top: 1px solid var(--wb-line-soft); }
 .record-transcript li[aria-current="true"] { background: var(--wb-blue-bg); }
@@ -54,8 +53,6 @@
 .record-transcript p { font-size: 15px; color: var(--wb-ink-2); line-height: 1.9; margin-top: var(--wb-s2); }
 .record-properties { background: var(--wb-bg); padding-top: var(--wb-s5); }
 .record-properties > h2 { font-weight: 600; }
-.record-history { max-width: 1120px; margin: 0 auto; }
-.record-history > summary { color: var(--wb-muted); }
 .record-revise { margin-top: var(--wb-s6); }
 @media (max-width: 1280px) {
   .record-toolbar { align-items: stretch; }
@@ -86,4 +83,37 @@
   .transcript-body > p { grid-column: 1 / -1; }
   .transcript-time { grid-column: 2; grid-row: 1; justify-self: end; min-height: var(--wb-touch); background: var(--wb-fill); padding-inline: var(--wb-s2); }
   .record-transcript p { font-size: var(--wb-text-base); }
+}
+
+/* A single, shared panel layout keeps the timeline and reading tabs aligned. */
+.record-timeline { display: flex; flex-direction: column; gap: var(--wb-s3); }
+.record-timeline > .task { margin: 0; padding: var(--wb-s4); background: var(--wb-fill); border: 1px solid var(--wb-line-soft); border-radius: var(--wb-radius); }
+.record-timeline .task__head { gap: var(--wb-s3); flex-wrap: wrap; }
+.record-timeline .nv-timeline { gap: var(--wb-s5); margin-top: var(--wb-s4); }
+.record-timeline .nv-timeline__item:not(:last-child) .nv-timeline__rail::after { bottom: calc(-1 * var(--wb-s5)); }
+.record-timeline .nv-timeline__content { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: var(--wb-s2) var(--wb-s4); }
+.record-timeline .nv-timeline__title { font-size: var(--wb-text-base); font-weight: 600; margin: 0; overflow-wrap: anywhere; }
+.record-timeline .nv-timeline__when { margin: 0; line-height: 22px; }
+.record-timeline .nv-timeline__detail { grid-column: 1 / -1; margin: 0; padding: 0; font-size: var(--wb-body); line-height: 1.8; overflow-wrap: anywhere; }
+.record-timeline .nv-timeline__content > :is(.task,.tl-action-btn) { grid-column: 1 / -1; }
+.record-timeline .tl-action-btn { justify-self: start; min-height: var(--wb-control); margin: 0; }
+.record-timeline .tl-doc-card { grid-column: 1 / -1; display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: center; gap: var(--wb-s3); padding: var(--wb-s4); margin: 0; border: 1px solid var(--wb-line); border-radius: var(--wb-radius); background: var(--wb-bg); }
+.record-timeline .tl-doc-card:hover { background: var(--wb-hover); }
+.record-timeline .tl-doc-card.is-active { background: var(--wb-blue-bg); border-color: var(--wb-blue); }
+.record-timeline .msg-attachment__body { display: grid; grid-template-columns: minmax(0,1fr); gap: var(--wb-s1); }
+.record-timeline .msg-attachment__name { font-size: var(--wb-body); white-space: normal; overflow-wrap: anywhere; }
+.record-timeline .msg-attachment__meta { min-width: 0; white-space: normal; font-size: var(--wb-text-xs); overflow-wrap: anywhere; }
+.record-timeline .msg-attachment__actions { color: var(--wb-blue); font-size: var(--wb-text-xs); white-space: nowrap; }
+@media (max-width: 767px), (min-width: 1025px) and (max-width: 1279px) {
+  .record-toolbar { flex-direction: column; align-items: stretch; }
+  .record-anchors { width: 100%; }
+  .record-export-actions { justify-content: flex-end; }
+}
+@media (max-width: 640px) {
+  .record-timeline .nv-timeline__content { grid-template-columns: minmax(0,1fr); gap: var(--wb-s1); }
+  .record-timeline .nv-timeline__when { grid-column: 1; }
+  .record-timeline .nv-timeline__detail { margin-top: var(--wb-s1); }
+  .record-timeline .tl-doc-card { grid-template-columns: auto minmax(0,1fr); padding: var(--wb-s3); margin-top: var(--wb-s2); }
+  .record-timeline .msg-attachment__actions { grid-column: 2; }
+  .record-timeline .tl-action-btn { min-height: var(--wb-touch); margin-top: var(--wb-s2); }
 }

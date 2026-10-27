@@ -177,7 +177,7 @@ test('情绪分析和历史抽屉保留，Esc 恢复焦点', async ({page}) => {
   await page.getByRole('navigation',{name:'内容导航'}).getByRole('link',{name:'情绪分析',exact:true}).click();
   await page.getByRole('button',{name:'生成情绪分析',exact:true}).click();
   await expect(page.getByText('交流平稳。')).toBeVisible();
-  await page.locator('.record-history > summary').click();
+  await page.getByRole('navigation',{name:'内容导航'}).getByRole('link',{name:'时间线',exact:true}).click();
   const trigger=page.locator('.record-history').getByRole('button').filter({hasText:'会议纪要 v1'});
   await trigger.click();
   await expect(page.getByRole('button',{name:'关闭预览'})).toBeVisible();
@@ -259,7 +259,8 @@ for (const width of [1440,390]) test('长逐字稿的定位、播放与固定控
   await page.goto('/app/recordings/rec-0');
   await expect(page.locator('.nav-item[href="/app/recordings"]')).toHaveClass(/is-active/);
   await page.getByRole('navigation',{name:'内容导航'}).getByRole('link',{name:'逐字稿',exact:true}).click();
-  await expect.poll(()=>page.locator('#record-transcript').evaluate(el=>el.getBoundingClientRect().top)).toBeLessThan(width < 640 ? 290 : 250);
+  await expect.poll(()=>page.locator('#main').evaluate(el=>el.scrollTop)).toBe(0);
+  await expect(page.locator('.record-heading')).toBeInViewport();
   const positions=await page.evaluate(()=>({section:document.querySelector('#record-transcript').getBoundingClientRect().top,tools:document.querySelector('.record-reading-tools').getBoundingClientRect().bottom}));
   expect(positions.section).toBeGreaterThanOrEqual(positions.tools);
   await page.getByRole('button',{name:'播放 00:01 的发言',exact:true}).click();
@@ -271,7 +272,8 @@ for (const width of [1440,390]) test('长逐字稿的定位、播放与固定控
   await page.locator('#main').evaluate(el=>{el.scrollTop += 800;});
   await expect.poll(()=>page.locator('.record-reading-tools').evaluate(el=>el.getBoundingClientRect().top)).toBe(44);
   await page.getByRole('navigation',{name:'内容导航'}).getByRole('link',{name:'会议纪要',exact:true}).click();
-  await expect.poll(()=>page.locator('#record-summary').evaluate(el=>el.getBoundingClientRect().top)).toBeLessThan(width < 640 ? 290 : 250);
+  await expect.poll(()=>page.locator('#main').evaluate(el=>el.scrollTop)).toBe(0);
+  await expect(page.locator('.record-heading')).toBeInViewport();
   expect(await page.locator('#main').evaluate(el=>el.scrollWidth<=el.clientWidth+1)).toBe(true);
   await page.screenshot({path:testInfo.outputPath('reading-tools.png'),animations:'disabled'});
   expect(f.unexpected).toEqual([]); expect(f.errors).toEqual([]);
@@ -378,4 +380,50 @@ test('纪要尚未生成时直接阅读并导出转写，空录音不显示导�
   await expect(page.getByRole('button',{name:'重试纪要',exact:true})).toBeVisible();
   await page.goto('/app/recordings/rec-3');
   await expect(page.getByRole('link',{name:'导出转写',exact:true})).toHaveCount(0);
+});
+
+for(const width of [2560,1100,390,320]) test(`四个页签的页头和面板起点保持一致 ${width}`,async({page})=>{
+  const f=await setup(page,{richContent:true,longTranscript:true,longModel:true});
+  await page.setViewportSize({width,height:1000});
+  await page.goto('/app/recordings/rec-0');
+  const measure=()=>page.evaluate(()=>{
+    const rect=selector=>{const r=document.querySelector(selector).getBoundingClientRect();return {top:r.top,left:r.left,width:r.width,height:r.height}};
+    return {header:rect('.record-heading'),tools:rect('.record-reading-tools'),panel:rect('.record-section:not([hidden])'),scrollTop:document.querySelector('#main').scrollTop};
+  });
+  await expect(page.locator('#record-summary')).toBeVisible();
+  const initial=await measure();
+  for(const [label,key] of [['逐字稿','transcript'],['情绪分析','emotion'],['时间线','timeline'],['会议纪要','summary']]){
+    await page.locator('#main').evaluate(el=>{el.scrollTop=900;});
+    await page.getByRole('navigation',{name:'内容导航'}).getByRole('link',{name:label,exact:true}).click();
+    await expect(page.locator('#record-'+key)).toBeVisible();
+    await expect.poll(()=>page.locator('#main').evaluate(el=>el.scrollTop)).toBe(0);
+    await expect(page.locator('.record-heading')).toBeInViewport();
+    const actual=await measure();
+    for(const element of ['header','tools'])for(const prop of ['top','left','width','height'])expect(actual[element][prop]).toBeCloseTo(initial[element][prop],0);
+    for(const prop of ['top','left','width'])expect(actual.panel[prop]).toBeCloseTo(initial.panel[prop],0);
+    await expect(page.locator('.record-section:not([hidden])')).toHaveCount(1);
+    expect(await page.locator('#main').evaluate(el=>el.scrollWidth<=el.clientWidth+1)).toBe(true);
+  }
+  expect(f.errors).toEqual([]);expect(f.unexpected).toEqual([]);
+});
+
+test('时间线独立展示任务和版本，支持逐字稿预览与刷新定位',async({page})=>{
+  const f=await setup(page,{tasks:[{id:'asr-task',recording_id:'rec-0',step:'VAD+说话人分离转写',status:'done',progress:100,elapsed_label:'00:10',created_at:'2026-10-26 09:00:00',started_at:'2026-10-26 09:00:00',finished_at:'2026-10-26 09:00:10',updated_at:'2026-10-26 09:00:10'}]});
+  await page.goto('/app/recordings/rec-0');
+  await expect(page.locator('#record-timeline')).toBeHidden();
+  await expect(page.locator('.record-history > summary')).toHaveCount(0);
+  await page.getByRole('navigation',{name:'内容导航'}).getByRole('link',{name:'时间线',exact:true}).click();
+  await expect(page.getByRole('heading',{name:'处理时间线',exact:true})).toBeVisible();
+  await expect(page.locator('#record-timeline')).toContainText('VAD+说话人分离转写');
+  await expect(page.getByRole('progressbar',{name:'转写与纪要进度',exact:true})).toHaveAttribute('aria-valuenow','100');
+  const trigger=page.locator('#record-timeline').getByRole('button').filter({hasText:'逐字稿'});
+  await trigger.click();
+  await expect(page.getByRole('dialog')).toContainText('第一轮试用先确认需求。');
+  await page.keyboard.press('Escape');
+  await expect(trigger).toBeFocused();
+  await page.reload();
+  await expect(page.locator('#record-timeline')).toBeVisible();
+  await expect(page.locator('.record-heading')).toBeInViewport();
+  await expect(page.getByRole('navigation',{name:'内容导航'}).getByRole('link',{name:'时间线',exact:true})).toHaveAttribute('aria-current','page');
+  expect(f.errors).toEqual([]);expect(f.unexpected).toEqual([]);
 });

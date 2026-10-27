@@ -237,28 +237,19 @@ export function Timeline(props: TimelineProps) {
   const currentLabel = donePct >= 100 ? "已完成" : currentEvent ? currentEvent.title : "处理中";
 
   return (
-    <section className="card u-flex u-col u-gap-3">
-      <header className="u-flex u-between u-items-baseline">
-        <h3 className="u-fs-base u-fw-semibold u-m-0">
-          录音处理时间线
-        </h3>
-        <span className="meta u-fs-xs u-fg-subtle">
-          {stagesDone}/2 阶段 · {donePct}%
-        </span>
-      </header>
-
+    <div className="record-timeline">
       <div className={cn("task u-btn-reset", donePct >= 100 && "is-done")}>
         <div className="task__head">
-          <span className="task__name">整体进度</span>
-          <span className="task__step">{donePct}%</span>
+          <span className="task__name">转写与纪要</span>
+          <span className="task__step">{stagesDone}/2 阶段 · {donePct}%</span>
         </div>
-        <div className="task__bar">
+        <div className="task__bar" role="progressbar" aria-label="转写与纪要进度" aria-valuenow={donePct} aria-valuemin={0} aria-valuemax={100}>
           <div className="task__fill" style={{ width: `${donePct}%` }} />
         </div>
       </div>
 
       <p className="meta u-fs-xs u-fg-subtle u-m-0">
-        当前：{currentLabel}
+        转写与纪要：{currentLabel}
       </p>
 
       <ol className="nv-timeline u-mt-2">
@@ -293,10 +284,11 @@ export function Timeline(props: TimelineProps) {
                   <button
                     type="button"
                     className={cn("msg-attachment tl-doc-card u-w-full u-pointer u-mt-2", isActive && "is-active")}
-                    onClick={event.onClick}
-                    style={{
-                      background: isActive ? "var(--accent-soft)" : "var(--bg-canvas)",
-                      borderColor: isActive ? "var(--accent-default)" : undefined,
+                    onClick={(e) => {
+                      // Safari does not focus buttons on pointer clicks. Capture the
+                      // preview trigger so closing the drawer can restore focus here.
+                      e.currentTarget.focus();
+                      event.onClick?.();
                     }}
                   >
                     <span className="msg-attachment__type">{event.artifact.type}</span>
@@ -333,6 +325,6 @@ export function Timeline(props: TimelineProps) {
           );
         })}
       </ol>
-    </section>
+    </div>
   );
 }
